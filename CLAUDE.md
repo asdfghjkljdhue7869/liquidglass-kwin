@@ -45,3 +45,19 @@ BAND 40, LENS_PX 24, DRIFT 0.12, FROST 0.30, RIM_FROST 0.70, RIM_TINT 0.22, WASH
 - Force glass for windows that never request blur (Brave and others).
 - Automatic rebuild after KWin package updates (pacman hook).
 - Panel and popup behaviour after the effect swap is unverified.
+
+## Next session (written at the end of session 1)
+Status: the glass baseline is approved and committed. The plugin is installed and loads through the hook. A login automation script exists (install/kwin-glass-login.sh); whether the autostart entry was installed is not confirmed. The user set the window borders to huge in System Settings (Aurorae theme Sweet-Mars-transparent) so the rounded glass sits as an inset in the frame.
+
+Immediate goals:
+1. Remove the square outer corners of window frames, system-wide (the Aurorae decoration reports no radius).
+2. The user will describe what still bothers them about the glass. Ask first, do not guess. Tune live with the override shader.
+3. First step of the session: compare pacman -Q kwin with ~/.config/liquidglass/kwin-effect.version. A KWin update means the plugin must be rebuilt (clean rebuild, install, refresh the version file, log out and in).
+
+Corner plan (names checked in the KWin 6.7.5 source, nothing compiled yet):
+- EffectWindow::windowItem() is public. WindowItem::decorationItem() is public and KWIN_EXPORT. Item::setBorderRadius(const BorderRadius&) is public. BorderRadius lives in scene/borderradius.h (class KWIN_EXPORT BorderRadius); its constructors were not checked yet.
+- The scene clips an item and all of its descendants to that items rounded rect (scene/workspacescene.cpp, calculateClipCorner). The client content container already receives the window radius. The DecorationItem and the ShadowItem are siblings of it, so a radius set on the DecorationItem rounds the frame without clipping the shadow. With huge borders the client corners stay inside the frame.
+- Plan: in LiquidGlassEffect, set a radius on the decoration item of normal windows that have a decoration. Skip maximized and fullscreen windows. Handle windowAdded and the existing windows at load. Restore a null radius in the destructor and when the effect unloads.
+- Not found yet: signal names for maximize, fullscreen and decoration changes. They are not in effect/effecthandler.h; look in effect/effectwindow.h and window.h before writing code. EffectsHandler::windowAdded, windowDeleted and stackingOrder() exist. EffectWindow::hasDecoration(), isFullScreen(), isNormalWindow() exist.
+- Alternatives: edit the corner shapes in the Aurorae SVG of Sweet-Mars-transparent (theme files under ~/.local/share/aurorae/themes), or switch to Breeze (the only installed decoration importing setBorderRadius, but it loses the traffic-light look).
+- Every plugin rebuild needs: install, version file refresh, logout and login once.
