@@ -1,0 +1,11 @@
+kwin-src/
+build/
+stage/
+*.log
+*.bak*
+*.orig
+*.prev*
+*.pre4*
+effect.bak.*
+testclient/glasstest
+testclient/glasstest-max

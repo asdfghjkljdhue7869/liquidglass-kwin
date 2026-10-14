@@ -1,0 +1,12 @@
+s/\bBlurEffectData\b/LiquidGlassEffectData/g
+s/\bBlurRenderData\b/LiquidGlassRenderData/g
+s/\bBlurEffect\b/LiquidGlassEffect/g
+s/\bBlurConfig\b/LiquidGlassConfig/g
+s/blurconfig\.h/liquidglassconfig.h/g
+s/"blur\.h"/"liquidglass.h"/g
+s/\bKWIN_BLUR\b/KWIN_LIQUIDGLASS/g
+s/kwin_effect_blur/kwin_effect_liquidglass/g
+s/Q_INIT_RESOURCE(blur)/Q_INIT_RESOURCE(liquidglass)/g
+s#:/effects/blur/#:/effects/liquidglass/#g
+s/moc_blur\.cpp/moc_liquidglass.cpp/g
+s/metadata\.json\.stripped/metadata.json/g

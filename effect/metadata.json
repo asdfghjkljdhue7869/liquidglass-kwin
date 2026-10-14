@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Category": "Appearance",
+        "Description": "Liquid glass wash behind translucent surfaces",
+        "EnabledByDefault": false,
+        "License": "GPL",
+        "Name": "Liquid Glass Wash"
+    },
+    "org.kde.kwin.effect": {
+        "enabledByDefaultMethod": false
+    }
+}

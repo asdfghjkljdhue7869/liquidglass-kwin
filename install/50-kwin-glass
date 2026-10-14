@@ -1,0 +1,23 @@
+#!/bin/bash
+mode=$1
+cfg=$HOME/.config/liquidglass
+so=/usr/lib/qt6/plugins/kwin/effects/plugins/liquidglasswash.so
+want=$(cat $cfg/kwin-effect.version 2>/dev/null)
+have=$(pacman -Q kwin 2>/dev/null | cut -d " " -f2)
+case "$mode" in
+  lite|full)
+    if [ ! -f "$so" ]; then echo "kwin glass: plugin not installed"; exit 0; fi
+    if [ -z "$want" ] || [ "$want" != "$have" ]; then echo "kwin glass: KWin is now $have, effect was built for $want; rebuild first, staying on stock blur"; exit 0; fi
+    qdbus6 org.kde.KWin /Effects unloadEffect blur > /dev/null 2>&1
+    r=$(qdbus6 org.kde.KWin /Effects loadEffect liquidglasswash 2>/dev/null)
+    if [ "$r" != "true" ]; then
+      qdbus6 org.kde.KWin /Effects loadEffect blur > /dev/null 2>&1
+      echo "kwin glass: load failed, restored stock blur"
+    fi
+    ;;
+  off)
+    qdbus6 org.kde.KWin /Effects unloadEffect liquidglasswash > /dev/null 2>&1
+    qdbus6 org.kde.KWin /Effects loadEffect blur > /dev/null 2>&1
+    ;;
+esac
+exit 0

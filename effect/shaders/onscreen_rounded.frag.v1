@@ -1,0 +1,84 @@
+#version 140
+
+#include "sdf.glsl"
+
+uniform sampler2D texUnit;
+uniform mat4 colorMatrix;
+uniform float offset;
+uniform vec2 halfpixel;
+uniform vec4 box;
+uniform vec4 cornerRadius;
+uniform float opacity;
+
+in vec2 uv;
+in vec2 vertex;
+
+out vec4 fragColor;
+
+const float EDGE_W = 22.0;
+const float BEND_PX = 16.0;
+const float DRIFT = 0.40;
+const float RIM_W = 1.6;
+const float RIM_MAIN = 0.60;
+const float RIM_OPP = 0.20;
+const float WASH_AMOUNT = 0.12;
+const float SHEEN = 0.07;
+const float DITHER = 1.0;
+const vec2 LIGHT = vec2(-0.6, -0.8);
+
+vec4 upsample(vec2 p)
+{
+    vec4 sum = texture(texUnit, p + vec2(-halfpixel.x * 2.0, 0.0) * offset);
+    sum += texture(texUnit, p + vec2(-halfpixel.x, halfpixel.y) * offset) * 2.0;
+    sum += texture(texUnit, p + vec2(0.0, halfpixel.y * 2.0) * offset);
+    sum += texture(texUnit, p + vec2(halfpixel.x, halfpixel.y) * offset) * 2.0;
+    sum += texture(texUnit, p + vec2(halfpixel.x * 2.0, 0.0) * offset);
+    sum += texture(texUnit, p + vec2(halfpixel.x, -halfpixel.y) * offset) * 2.0;
+    sum += texture(texUnit, p + vec2(0.0, -halfpixel.y * 2.0) * offset);
+    sum += texture(texUnit, p + vec2(-halfpixel.x, -halfpixel.y) * offset) * 2.0;
+    return sum / 12.0;
+}
+
+void main(void)
+{
+    float f = sdfRoundedBox(vertex, box.xy, box.zw, cornerRadius);
+    float df = fwidth(f);
+    vec2 g = vec2(dFdx(f), dFdy(f));
+    vec2 n = g / max(length(g), 0.0001);
+    float d = -f;
+
+    vec4 base = upsample(uv);
+    vec3 rgb = base.rgb;
+
+    if (d < EDGE_W) {
+        float t = 1.0 - clamp(d / EDGE_W, 0.0, 1.0);
+        float bend = t * t * t;
+        vec2 disp = -n * bend * BEND_PX * vec2(halfpixel.x, -halfpixel.y);
+        float cr = textureLod(texUnit, uv + disp * (1.0 + DRIFT), 0.0).r;
+        float cg = textureLod(texUnit, uv + disp, 0.0).g;
+        float cb = textureLod(texUnit, uv + disp * (1.0 - DRIFT), 0.0).b;
+        rgb = mix(rgb, vec3(cr, cg, cb), clamp(t * 1.5, 0.0, 1.0));
+    }
+
+    vec2 q = (vertex - box.xy) / max(box.zw, vec2(1.0));
+    vec3 wash = vec3(1.00, 0.30, 0.70) * exp(-dot(q - vec2(-0.6, -0.5), q - vec2(-0.6, -0.5)) / 0.8);
+    wash += vec3(0.20, 0.90, 1.00) * exp(-dot(q - vec2(0.7, -0.2), q - vec2(0.7, -0.2)) / 0.8);
+    wash += vec3(0.60, 0.35, 1.00) * exp(-dot(q - vec2(0.1, 0.8), q - vec2(0.1, 0.8)) / 0.8);
+    rgb += wash * WASH_AMOUNT;
+
+    float yy = clamp((vertex.y - (box.y - box.w)) / max(2.0 * box.w, 1.0), 0.0, 1.0);
+    rgb += vec3(SHEEN * pow(1.0 - yy, 3.0));
+
+    vec4 c = vec4(rgb, base.a) * colorMatrix;
+
+    float rimMask = 1.0 - smoothstep(0.0, RIM_W, d);
+    float facing = dot(n, normalize(LIGHT));
+    float rim = rimMask * (RIM_MAIN * max(facing, 0.0) + RIM_OPP * max(-facing, 0.0));
+    c.rgb += vec3(rim);
+
+    float h = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    c.rgb += vec3((h - 0.5) * DITHER / 255.0);
+
+    fragColor = c * opacity;
+    fragColor *= 1.0 - clamp(0.5 + f / df, 0.0, 1.0);
+}
