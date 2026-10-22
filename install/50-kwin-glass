@@ -13,9 +13,12 @@ case "$mode" in
     if [ "$r" != "true" ]; then
       qdbus6 org.kde.KWin /Effects loadEffect blur > /dev/null 2>&1
       echo "kwin glass: load failed, restored stock blur"
+    elif [ ! -f "$cfg/round.off" ]; then
+      qdbus6 org.kde.KWin /Effects loadEffect liquidglassround > /dev/null 2>&1
     fi
     ;;
   off)
+    qdbus6 org.kde.KWin /Effects unloadEffect liquidglassround > /dev/null 2>&1
     qdbus6 org.kde.KWin /Effects unloadEffect liquidglasswash > /dev/null 2>&1
     qdbus6 org.kde.KWin /Effects loadEffect blur > /dev/null 2>&1
     ;;

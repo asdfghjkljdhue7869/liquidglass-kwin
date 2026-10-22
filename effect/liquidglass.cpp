@@ -121,6 +121,7 @@ LiquidGlassEffect::LiquidGlassEffect()
         m_roundedOnscreenPass.cornerRadiusLocation = m_roundedOnscreenPass.shader->uniformLocation("cornerRadius");
         m_roundedOnscreenPass.opacityLocation = m_roundedOnscreenPass.shader->uniformLocation("opacity");
         m_roundedOnscreenPass.sharpLocation = m_roundedOnscreenPass.shader->uniformLocation("sharpTex");
+        m_roundedOnscreenPass.kindLocation = m_roundedOnscreenPass.shader->uniformLocation("kind");
     }
 
     m_downsamplePass.shader = ShaderManager::instance()->generateShaderFromFile(ShaderTrait::MapTexture,
@@ -251,6 +252,12 @@ void LiquidGlassEffect::initBlurStrengthValues()
     }
 }
 
+static qreal s_frameRadius = 30.0;
+static bool s_forceMenu = true;
+static bool s_forceTooltip = false;
+static bool s_forcePlasmaPopup = true;
+static qreal s_menuRadius = 18.0;
+
 void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
 {
     LiquidGlassConfig::self()->read();
@@ -270,9 +277,55 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
             m_roundedOnscreenPass.cornerRadiusLocation = m_roundedOnscreenPass.shader->uniformLocation("cornerRadius");
             m_roundedOnscreenPass.opacityLocation = m_roundedOnscreenPass.shader->uniformLocation("opacity");
             m_roundedOnscreenPass.sharpLocation = m_roundedOnscreenPass.shader->uniformLocation("sharpTex");
+            m_roundedOnscreenPass.kindLocation = m_roundedOnscreenPass.shader->uniformLocation("kind");
             qCWarning(KWIN_LIQUIDGLASS) << "shader override loaded:" << overrideFrag;
         } else {
             qCWarning(KWIN_LIQUIDGLASS) << "shader override failed to compile, keeping the current shader";
+        }
+    }
+
+    const QString radiusFile = QDir::homePath() + QStringLiteral("/.config/liquidglass/frame_radius");
+    if (QFile::exists(radiusFile)) {
+        QFile rf(radiusFile);
+        if (rf.open(QIODevice::ReadOnly)) {
+            bool ok = false;
+            const double v = QString::fromUtf8(rf.readAll()).trimmed().toDouble(&ok);
+            if (ok && v >= 0.0 && v <= 200.0) {
+                s_frameRadius = v;
+            }
+        }
+    }
+    qCWarning(KWIN_LIQUIDGLASS) << "frame radius setting:" << s_frameRadius;
+
+    {
+        QFile policyFile(QDir::homePath() + QStringLiteral("/.config/liquidglass/force_glass"));
+        if (policyFile.open(QIODevice::ReadOnly)) {
+            QString policyText = QString::fromUtf8(policyFile.readAll());
+            policyText.replace(QChar(10), QChar(32));
+            const QStringList words = policyText.split(QChar(32), Qt::SkipEmptyParts);
+            s_forceMenu = words.contains(QStringLiteral("menu"));
+            s_forceTooltip = words.contains(QStringLiteral("tooltip"));
+            s_forcePlasmaPopup = words.contains(QStringLiteral("plasmapopup"));
+        }
+        qCWarning(KWIN_LIQUIDGLASS) << "force glass: menu" << s_forceMenu << "tooltip" << s_forceTooltip << "plasmapopup" << s_forcePlasmaPopup;
+    }
+    {
+        QFile roundFile(QDir::homePath() + QStringLiteral("/.config/liquidglass/round.conf"));
+        if (roundFile.open(QIODevice::ReadOnly)) {
+            const QStringList rows = QString::fromUtf8(roundFile.readAll()).split(QChar(10), Qt::SkipEmptyParts);
+            for (const QString &row : rows) {
+                const QStringList rw = row.simplified().split(QChar(32), Qt::SkipEmptyParts);
+                if (rw.size() >= 2 && rw[0] == QStringLiteral("menu")) {
+                    s_menuRadius = qBound(0.0, rw[1].toDouble(), 100.0);
+                }
+            }
+        }
+        qCWarning(KWIN_LIQUIDGLASS) << "menu radius setting:" << s_menuRadius;
+    }
+    if (m_valid) {
+        const auto policyWindows = effects->stackingOrder();
+        for (EffectWindow *pw : policyWindows) {
+            updateBlurRegion(pw);
         }
     }
 
@@ -288,6 +341,40 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
 
     // Update all windows for the blur to take effect
     effects->addRepaintFull();
+}
+
+static float glassKindOf(EffectWindow *w)
+{
+    if (!w) {
+        return 0.0f;
+    }
+    if (w->isDock()) {
+        return 2.0f;
+    }
+    if (w->isPopupWindow() || w->isTooltip() || w->isPopupMenu() || w->isDropdownMenu() || w->isComboBox() || w->isMenu()) {
+        return 1.0f;
+    }
+    if (w->isSpecialWindow() && !w->isDesktop() && w->window() && w->window()->resourceClass().contains(QStringLiteral("plasmashell"))) {
+        return 1.0f;
+    }
+    return 0.0f;
+}
+
+static bool forcedGlass(EffectWindow *w)
+{
+    if (!w || w->isDesktop() || w->isDock()) {
+        return false;
+    }
+    if (w->isTooltip()) {
+        return s_forceTooltip;
+    }
+    if (w->isPopupWindow() || w->isPopupMenu() || w->isDropdownMenu() || w->isComboBox() || w->isMenu()) {
+        return s_forceMenu;
+    }
+    if (w->isSpecialWindow() && w->window() && w->window()->resourceClass().contains(QStringLiteral("plasmashell"))) {
+        return s_forcePlasmaPopup;
+    }
+    return false;
 }
 
 void LiquidGlassEffect::updateBlurRegion(EffectWindow *w)
@@ -334,6 +421,16 @@ void LiquidGlassEffect::updateBlurRegion(EffectWindow *w)
 
     if (w->decorationHasAlpha() && decorationSupportsBlurBehind(w)) {
         frame = decorationBlurRegion(w);
+    } else if (w->decoration()) {
+        frame = RegionF(w->decoration()->rect()) - w->contentsRect();
+        const RectF cr = w->contentsRect();
+        static int frameGlassLogs = 0;
+        if (frameGlassLogs++ < 8)
+        qCWarning(KWIN_LIQUIDGLASS) << "frame glass fallback" << w << "alpha" << w->decorationHasAlpha() << "decoration rect" << w->decoration()->rect() << "contents" << cr.x() << cr.y() << cr.width() << cr.height();
+    }
+
+    if (!content.has_value() && !frame.has_value() && forcedGlass(w)) {
+        content = RegionF();
     }
 
     if (content.has_value() || frame.has_value()) {
@@ -487,8 +584,10 @@ RegionF LiquidGlassEffect::blurRegion(EffectWindow *w) const
                 // An empty region means that the blur effect should be enabled
                 // for the whole window.
                 region = w->contentsRect();
-            } else {
+            } else if (w->decoration()) {
                 region = content->translated(w->contentsRect().topLeft()) & w->contentsRect();
+            } else {
+                region = *content & w->contentsRect();
             }
             if (frame.has_value()) {
                 region += frame.value();
@@ -528,12 +627,12 @@ bool LiquidGlassEffect::shouldBlur(const EffectWindow *w, int mask, const Window
     return true;
 }
 
-void LiquidGlassEffect::drawWindow(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const Region &deviceRegion, WindowPaintData &data)
+bool LiquidGlassEffect::drawWindow(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const Region &deviceRegion, WindowPaintData &data)
 {
     blur(renderTarget, viewport, w, mask, deviceRegion, data);
 
     // Draw the window over the blurred area
-    effects->drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
+    return effects->drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
 }
 
 GLTexture *LiquidGlassEffect::ensureNoiseTexture()
@@ -858,6 +957,14 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
             const float bw = float(scaledBackgroundRect.width());
             const float bh = float(scaledBackgroundRect.height());
             float rr = 14.0f * float(viewport.scale());
+            if (w->hasDecoration() && w->window()) {
+                Window *gw = w->window();
+                const bool roundedFrame = !w->isFullScreen() && gw->maximizeMode() == MaximizeRestore && !gw->tile() && !gw->requestedTile();
+                rr = (roundedFrame ? float(s_frameRadius) : 1.0f) * float(viewport.scale());
+            }
+            if (!w->hasDecoration() && glassKindOf(w) == 1.0f) {
+                rr = float(s_menuRadius) * float(viewport.scale());
+            }
             if (rr > bw * 0.5f) {
                 rr = bw * 0.5f;
             }
@@ -871,6 +978,15 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, radiusUniform);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.opacityLocation, modulation);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.sharpLocation, 1);
+        float glassKind = 0.0f;
+        if (w->isDock()) {
+            glassKind = 2.0f;
+        } else if (w->isPopupWindow() || w->isTooltip() || w->isPopupMenu() || w->isDropdownMenu() || w->isComboBox() || w->isMenu()) {
+            glassKind = 1.0f;
+        } else if (w->isSpecialWindow() && !w->isDesktop() && w->window() && w->window()->resourceClass().contains(QStringLiteral("plasmashell"))) {
+            glassKind = 1.0f;
+        }
+        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.kindLocation, glassKind);
 
         read->colorAttachment()->bind();
         glActiveTexture(GL_TEXTURE1);

@@ -8,6 +8,7 @@ uniform vec2 halfpixel;
 uniform vec4 box;
 uniform vec4 cornerRadius;
 uniform float opacity;
+uniform float kind;
 
 in vec2 uv;
 in vec2 vertex;
@@ -17,12 +18,16 @@ out vec4 fragColor;
 const float BAND = 40.0;
 const float LENS_PX = 24.0;
 const float DRIFT = 0.12;
-const float FROST = 0.30;
-const float SAT = 1.18;
+const float FROST = 0.55;
+const float SAT = 1.30;
 const float RIM_FROST = 0.70;
 const float RIM_TINT = 0.22;
-const float WASH_BASE = 0.05;
+const float WASH_BASE = 0.04;
 const float DITHER = 1.0;
+const float MENU_FROST = 0.55;
+const float MENU_WASH = 0.03;
+const float MENU_DIM = 0.15;
+const float TOP_SPEC = 0.80;
 const vec2 LIGHT = vec2(-0.45, -1.0);
 
 float gauss(float x)
@@ -66,7 +71,9 @@ void main(void)
     vec3 col = vec3(cr, cg, cb);
 
     vec3 soft = textureLod(texUnit, uv, 0.0).rgb;
-    col = mix(col, soft, FROST);
+    float isMenu = step(0.5, kind) * (1.0 - step(1.5, kind));
+    col = mix(col, soft, mix(FROST, MENU_FROST, isMenu));
+    col *= 1.0 - MENU_DIM * isMenu;
 
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(vec3(lum), col, SAT);
@@ -78,13 +85,13 @@ void main(void)
 
     vec3 rimCol = mix(col, soft, 0.6) + wash * RIM_TINT;
     col = mix(col, rimCol, RIM_FROST * k);
-    col += wash * WASH_BASE;
+    col += wash * mix(WASH_BASE, MENU_WASH, isMenu);
 
     float l = dot(n, normalize(LIGHT));
     float tl = pow(max(l, 0.0), 2.0);
     float brr = pow(max(-l, 0.0), 2.0);
     float line = gauss(f + 1.0);
-    float spec = line * (0.04 + 1.15 * tl) + line * brr * 0.22;
+    float spec = line * (0.04 + TOP_SPEC * tl) + line * brr * 0.22;
     float line2 = gauss((f + 3.0) / 1.2);
     float refl = line2 * brr * 0.45;
     float meniscus = gauss((f + 4.0) / 3.5) * tl * 0.10;

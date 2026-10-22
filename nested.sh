@@ -10,7 +10,7 @@ mkdir -p $T/config $T/cache
 [ -e $HOME/.config/kdeglobals ] && cp $HOME/.config/kdeglobals $T/config/
 [ -d $HOME/.config/Kvantum ] && cp -r $HOME/.config/Kvantum $T/config/
 if [ "$MODE" = "fork" ]; then
-  printf "[Plugins]\nblurEnabled=false\nliquidglasswashEnabled=true\n" > $T/config/kwinrc
+  printf "[Plugins]\nblurEnabled=false\nliquidglasswashEnabled=true\nliquidglassroundEnabled=true\n" > $T/config/kwinrc
 else
   printf "[Plugins]\nblurEnabled=true\nliquidglasswashEnabled=false\n" > $T/config/kwinrc
 fi

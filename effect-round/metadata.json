@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Category": "Appearance",
+        "Description": "Rounded outer corners for decorated windows",
+        "EnabledByDefault": false,
+        "License": "GPL",
+        "Name": "Liquid Glass Round"
+    },
+    "org.kde.kwin.effect": {
+        "enabledByDefaultMethod": false
+    }
+}

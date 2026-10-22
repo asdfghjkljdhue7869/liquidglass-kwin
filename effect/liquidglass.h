@@ -12,6 +12,7 @@
 #include "scene/item.h"
 
 #include <QList>
+#include <QPointer>
 
 #include <unordered_map>
 
@@ -58,7 +59,7 @@ public:
 
     void reconfigure(ReconfigureFlags flags) override;
     void prePaintScreen(ScreenPrePaintData &data) override;
-    void drawWindow(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const Region &deviceRegion, WindowPaintData &data) override;
+    bool drawWindow(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const Region &deviceRegion, WindowPaintData &data) override;
 
     bool provides(Feature feature) override;
     bool isActive() const override;
@@ -112,6 +113,7 @@ private:
         int cornerRadiusLocation;
         int opacityLocation;
         int sharpLocation;
+        int kindLocation;
     } m_roundedOnscreenPass;
 
     struct

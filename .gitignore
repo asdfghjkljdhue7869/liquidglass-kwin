@@ -9,3 +9,8 @@ stage/
 effect.bak.*
 testclient/glasstest
 testclient/glasstest-max
+build-round/
+*.so
+*.so.prev*
+*.pre-*
+testclient/glasstest-toggle
