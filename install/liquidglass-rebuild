@@ -1,0 +1,53 @@
+#!/bin/bash
+U=a
+H=/home/$U
+R=$H/projects/liquidglass-kwin
+D=$H/.config/liquidglass
+I=/usr/lib/qt6/plugins/kwin/effects/plugins
+LOG=$D/rebuild.log
+note() {
+  printf "%s %s\n" "$(date +%F-%T)" "$1" >> "$LOG"
+  chown "$U:$U" "$LOG" 2>/dev/null
+  echo "liquidglass: $1"
+}
+if [ ! -d "$R" ] || [ ! -d "$D" ]; then
+  echo "liquidglass: repo or config folder missing, nothing done"
+  exit 0
+fi
+have=$(pacman -Q kwin 2>/dev/null | cut -d" " -f2)
+[ -n "$have" ] || exit 0
+want=$(cat "$D/kwin-effect.version" 2>/dev/null)
+if [ "$1" != "--install-only" ]; then
+  if [ "$have" = "$want" ]; then
+    note "plugins already built for kwin $have"
+    exit 0
+  fi
+  note "kwin is now $have, plugins were built for ${want:-nothing}, rebuilding"
+  if ! runuser -u "$U" -- env HOME="$H" PATH=/usr/local/bin:/usr/bin "$R/install/lg-build.sh"; then
+    note "build failed for kwin $have, staying on stock blur, see /tmp/lg-auto-build1.log and /tmp/lg-auto-build2.log"
+    exit 0
+  fi
+fi
+gso=$R/build/bin/kwin/effects/plugins/liquidglasswash.so
+rso=$(find "$R/build-round" -name liquidglassround.so 2>/dev/null | head -n1)
+if [ ! -f "$gso" ] || [ -z "$rso" ]; then
+  note "built plugins not found, nothing installed"
+  exit 0
+fi
+for f in "$gso" "$rso"; do
+  if ldd -r "$f" 2>&1 | grep -q "undefined symbol"; then
+    note "undefined symbols in $(basename "$f"), nothing installed"
+    exit 0
+  fi
+done
+mkdir -p "$D/prev"
+cp -f "$I/liquidglasswash.so" "$D/prev/liquidglasswash.so.${want:-none}" 2>/dev/null
+cp -f "$I/liquidglassround.so" "$D/prev/liquidglassround.so.${want:-none}" 2>/dev/null
+if install -Dm755 "$gso" "$I/liquidglasswash.so" && install -Dm755 "$rso" "$I/liquidglassround.so"; then
+  printf "%s\n" "$have" > "$D/kwin-effect.version"
+  chown -R "$U:$U" "$D/prev" "$D/kwin-effect.version"
+  note "installed plugins for kwin $have"
+else
+  note "install failed, nothing changed"
+fi
+exit 0

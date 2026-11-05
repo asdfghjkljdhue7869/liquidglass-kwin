@@ -9,7 +9,11 @@ case "$mode" in
     if [ ! -f "$so" ]; then echo "kwin glass: plugin not installed"; exit 0; fi
     if [ -z "$want" ] || [ "$want" != "$have" ]; then echo "kwin glass: KWin is now $have, effect was built for $want; rebuild first, staying on stock blur"; exit 0; fi
     qdbus6 org.kde.KWin /Effects unloadEffect blur > /dev/null 2>&1
-    r=$(qdbus6 org.kde.KWin /Effects loadEffect liquidglasswash 2>/dev/null)
+    if [ "$(qdbus6 org.kde.KWin /Effects isEffectLoaded liquidglasswash 2>/dev/null)" = "true" ]; then
+      r=true
+    else
+      r=$(qdbus6 org.kde.KWin /Effects loadEffect liquidglasswash 2>/dev/null)
+    fi
     if [ "$r" != "true" ]; then
       qdbus6 org.kde.KWin /Effects loadEffect blur > /dev/null 2>&1
       echo "kwin glass: load failed, restored stock blur"

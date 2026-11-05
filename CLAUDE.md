@@ -94,3 +94,28 @@ Corner plan (names checked in the KWin 6.7.5 source, nothing compiled yet):
 7. The overall glass look is accepted.
 
 Status when this log was written: the global rounding plugins were installed on 2026-10-22 and still need verification after a login.
+
+## Session log 2026-10-27 to 2026-11-01 (supersedes older status where it conflicts)
+
+### Status
+- liquidglassround rounds three kinds of windows: 1 decorated frames, 2 menus and popups, 3 the floating dock (with an inset). Chain position 75, after wobbly. The shadow-safe mask shader keeps shadows outside the rectangle (version 1).
+- Tier switch: ~/.config/liquidglass/tier.sh lite|full|off applies tiers/lite.conf or tiers/full.conf (kwinrc BlurStrength, NoiseStrength, Saturation plus shader constants through tune.sh). Lite is the approved iGPU look. Full (stronger blur, grain, lens, dispersion) is a first guess. The mode file records the last tier.
+- The SSD moves between the Dell laptop (Intel iGPU, use lite) and a desktop (Ryzen 5 5600X, RTX 3060 12 GB, NVIDIA open driver 615, KWin on OpenGL ES, HDMI 1080p at scale 1.35, use full). An auto tier by GPU at login is not built yet.
+- Hook 50-kwin-glass skips the glass load if liquidglasswash is already loaded. It used to treat that as a failed load and bring stock blur back, which also skipped the round effect.
+- Automatic rebuild after kwin upgrades, VERIFIED on 2026-11-05: pacman -Syu upgraded kwin 6.8.2-1.1 to 6.8.2-2.1, the hook ran, rebuilt and installed the plugins, and the upgrade took about 1.5 minutes. Pacman hook /etc/pacman.d/hooks/liquidglass-rebuild.hook runs /usr/local/bin/liquidglass-rebuild, which builds as the user through install/lg-build.sh (cmake --fresh and ninja for effect and effect-round), checks both plugins with ldd -r, installs them to /usr/lib/qt6/plugins/kwin/effects/plugins, writes kwin-effect.version and logs to ~/.config/liquidglass/rebuild.log. If anything fails nothing is installed and the version guard keeps stock blur. Run it by hand with sudo /usr/local/bin/liquidglass-rebuild. Copies of all files are in install/.
+- Login guards in login.sh, VERIFIED at a real login on 2026-11-05 (glass and round effect stable after 8 s): glass.pending and round.pending are created before loading and removed 8 seconds later if the effect is still loaded. A surviving marker at the next login creates glass.off or round.off, delete the file to re-enable. A refused hook (rebuild first) clears the markers.
+- NOT yet verified: the plugins built for kwin 6.8.2-2.1 loading after a restart. Check first.
+
+### Findings
+- NVIDIA desktop: the launcher shows no glass there. plasmashell logged about 10780 times Failed to compile shader: 0(5) : error C7573: OpenGL/ES requires precision specifier on this float type in the NVIDIA boot and nothing in the Intel boot. On the Intel laptop the launcher glass works. The launcher glass does not depend on the KWin plugin. Likely cause: a launcher shader has float declarations without precision in its OpenGL ES variant. Next step: /usr/lib/qt6/bin/qsb -d on each .qsb to dump the ES variant, find the shader, fix the source and rebuild the qsb.
+- Thin dark straight lines along the bottom and side edges of rounded menus and the dock, stopping where the rounded corner starts. Not on decorated frames. Believed to be the original rectangular shadow that the mask keeps outside the rectangle while the body is rounded.
+- About 5 percent leftover transparency at rounded corners, and the dock looks like two plates (a fainter plate around the last icon): not diagnosed, need zoomed screenshots on a bright background.
+- The window titlebar right-click menu has no glass. It is the KWin own menu. Capture its window flags with a KWin script before forcing glass on it.
+
+### Open items in order
+1. Launcher shader precision fix for NVIDIA.
+2. Shadow-safe shader version 2: remove the original shadow and draw a rounded soft shadow from the rounded-box distance, strength, size and y offset in round.conf.
+3. Titlebar menu glass.
+4. Auto tier by GPU at login.
+5. Corner transparency and the dock plate.
+6. Later: animated context menus, a blinking glass at the top of the screen seen once, wobbly plus glass (own deformation, then a water-drop merge of two windows), lag numbers never collected.

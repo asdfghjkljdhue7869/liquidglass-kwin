@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = kwin
+
+[Action]
+Description = Rebuilding the liquid glass KWin plugins for the new kwin
+When = PostTransaction
+Exec = /usr/local/bin/liquidglass-rebuild
