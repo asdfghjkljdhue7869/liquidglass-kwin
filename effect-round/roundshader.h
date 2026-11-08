@@ -24,6 +24,7 @@ uniform vec4 geometryColor;
 #include "sdf.glsl"
 uniform vec4 box;
 uniform vec4 cornerRadius;
+uniform vec4 shadowParams;
 in vec2 position0;
 #endif
 
@@ -74,10 +75,17 @@ void main(void)
 
 #if TRAIT_ROUNDED_CORNERS
     float f = sdfRoundedBox(position0, box.xy, box.zw, cornerRadius);
-    float g = sdfRoundedBox(position0, box.xy, box.zw, vec4(0.0));
     float df = fwidth(f);
-    float cut = clamp(0.5 + f / df, 0.0, 1.0);
-    result *= 1.0 - cut * (1.0 - step(0.0, g));
+    if (shadowParams.w > 0.5) {
+        float cover = 1.0 - clamp(0.5 + f / df, 0.0, 1.0);
+        float fs = sdfRoundedBox(position0 - vec2(0.0, shadowParams.z), box.xy, box.zw, cornerRadius);
+        float sh = shadowParams.x * (1.0 - smoothstep(0.0, max(shadowParams.y, 1.0), max(fs, 0.0)));
+        result = result * cover + vec4(0.0, 0.0, 0.0, sh) * (1.0 - cover);
+    } else {
+        float g = sdfRoundedBox(position0, box.xy, box.zw, vec4(0.0));
+        float cut = clamp(0.5 + f / df, 0.0, 1.0);
+        result *= 1.0 - cut * (1.0 - step(0.0, g));
+    }
 #endif
 
 #if TRAIT_TRANSFORM_COLORSPACE

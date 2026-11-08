@@ -8,6 +8,8 @@
 #include "opengl/glshader.h"
 #include "opengl/glshadermanager.h"
 #include "window.h"
+#include "core/region.h"
+#include "wayland/surface.h"
 
 #include <QDir>
 #include <QFile>
@@ -41,7 +43,7 @@ static qreal readFrameRadius(qreal fallback)
 static void logKind(int kind, const char *what, EffectWindow *w)
 {
     static int otherLogs = 0;
-    if (kind == 1 || otherLogs++ < 12) {
+    if (kind == 1 || otherLogs++ < 200) {
         qCWarning(KWIN_LIQUIDGLASSROUND) << "round:" << what << kind << w;
     }
 }
@@ -82,6 +84,7 @@ bool LiquidGlassRoundEffect::enabledByDefault()
 void LiquidGlassRoundEffect::readConfig()
 {
     m_radius = readFrameRadius(m_radius);
+    m_shadowActive = true;
     QFile file(QDir::homePath() + QStringLiteral("/.config/liquidglass/round.conf"));
     if (file.open(QIODevice::ReadOnly)) {
         const QStringList rows = QString::fromUtf8(file.readAll()).split(QChar(10), Qt::SkipEmptyParts);
@@ -99,10 +102,19 @@ void LiquidGlassRoundEffect::readConfig()
                 }
             } else if (parts[0] == QStringLiteral("tooltips")) {
                 m_roundTooltips = (parts[1] == QStringLiteral("1"));
+            } else if (parts[0] == QStringLiteral("shadow")) {
+                m_shadowActive = true;
+                m_shadowStrength = std::clamp(parts[1].toDouble(), 0.0, 1.0);
+                if (parts.size() >= 3) {
+                    m_shadowSize = std::clamp(parts[2].toDouble(), 1.0, 60.0);
+                }
+                if (parts.size() >= 4) {
+                    m_shadowOffset = std::clamp(parts[3].toDouble(), -20.0, 40.0);
+                }
             }
         }
     }
-    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips;
+    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset;
 }
 
 void LiquidGlassRoundEffect::reconfigure(ReconfigureFlags flags)
@@ -195,6 +207,7 @@ void LiquidGlassRoundEffect::slotWindowAdded(EffectWindow *w)
 void LiquidGlassRoundEffect::slotWindowDeleted(EffectWindow *w)
 {
     m_redirected.erase(w);
+    m_innerRects.erase(w);
 }
 
 void LiquidGlassRoundEffect::prePaintWindow(RenderView *view, EffectWindow *w, WindowPrePaintData &data)
@@ -240,6 +253,48 @@ bool LiquidGlassRoundEffect::drawWindow(const RenderTarget &renderTarget, const 
             ShaderBinder binder(m_shader.get());
             m_shader->setUniform(GLShader::Vec4Uniform::Box, QVector4D(bw * 0.5, bh * 0.5, ex, ey));
             m_shader->setUniform(GLShader::Vec4Uniform::CornerRadius, QVector4D(rad, rad, rad, rad));
+            bool innerMode = false;
+            if (m_shadowActive) {
+                RectF inner(0.0, 0.0, frame.width(), frame.height());
+                bool haveInner = false;
+                SurfaceInterface *surf = (kind == 1) ? nullptr : w->surface();
+                if (surf) {
+                    const RegionF blurReg = surf->blurRegion();
+                    if (!blurReg.isEmpty()) {
+                        inner = blurReg.boundingRect().intersected(inner);
+                        m_innerRects[w] = {inner.x(), inner.y(), inner.width(), inner.height()};
+                        haveInner = true;
+                    }
+                }
+                if (!haveInner) {
+                    const auto cached = m_innerRects.find(w);
+                    if (cached != m_innerRects.end()) {
+                        inner = RectF(cached->second[0], cached->second[1], cached->second[2], cached->second[3]);
+                    }
+                }
+                if (inner.width() > 8.0 && inner.height() > 8.0) {
+                    const double hx = inner.width() * 0.5 * scale;
+                    const double hy = inner.height() * 0.5 * scale;
+                    const double cx = (inner.x() + inner.width() * 0.5) * scale;
+                    const double cy = (inner.y() + inner.height() * 0.5) * scale;
+                    const double r2 = std::max(0.0, std::min(radius * scale, std::min(hx, hy)));
+                    m_shader->setUniform(GLShader::Vec4Uniform::Box, QVector4D(cx, cy, hx, hy));
+                    m_shader->setUniform(GLShader::Vec4Uniform::CornerRadius, QVector4D(r2, r2, r2, r2));
+                    innerMode = true;
+                    static int innerLogs = 0;
+                    if (innerLogs++ < 40) {
+                        qCWarning(KWIN_LIQUIDGLASSROUND) << "round: inner rect kind" << kind << "fromSurface" << haveInner << "frame" << frame.width() << frame.height() << "inner" << inner.x() << inner.y() << inner.width() << inner.height();
+                    }
+                }
+            }
+            const double shadowOn = innerMode ? m_shadowStrength : 0.0;
+            m_shader->setUniform("shadowParams", QVector4D(float(shadowOn), float(m_shadowSize * scale), float(m_shadowOffset * scale), innerMode ? 1.0f : 0.0f));
+            static int marginLogs = 0;
+            static int frameMarginLogs = 0;
+            if (kind == 1 && frameMarginLogs++ < 8) {
+                const auto ex2 = w->expandedGeometry();
+                qCWarning(KWIN_LIQUIDGLASSROUND) << "round: shadow margins kind" << kind << "left" << frame.left() - ex2.left() << "top" << frame.top() - ex2.top() << "right" << ex2.right() - frame.right() << "bottom" << ex2.bottom() - frame.bottom();
+            }
         }
     }
     return OffscreenEffect::drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);

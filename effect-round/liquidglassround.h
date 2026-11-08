@@ -2,6 +2,7 @@
 
 #include "effect/offscreeneffect.h"
 
+#include <array>
 #include <memory>
 #include <unordered_map>
 
@@ -47,6 +48,11 @@ private:
     qreal m_dockRadius = 24.0;
     qreal m_dockInset = 10.0;
     bool m_roundTooltips = false;
+    qreal m_shadowStrength = 0.0;
+    qreal m_shadowSize = 12.0;
+    qreal m_shadowOffset = 3.0;
+    bool m_shadowActive = false;
+    std::unordered_map<EffectWindow *, std::array<double, 4>> m_innerRects;
 };
 
 }

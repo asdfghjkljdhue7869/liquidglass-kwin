@@ -31,7 +31,13 @@
 #include "x11window.h"
 #endif
 
+#include <QApplication>
+#include <QWidget>
+#include <QImage>
+#include <QPixmap>
+#include <QWindow>
 #include <QDir>
+#include <QStyle>
 #include <QFile>
 #include <QGuiApplication>
 #include <QMatrix4x4>
@@ -46,6 +52,8 @@
 #include <KSharedConfig>
 
 #include <KDecoration3/Decoration>
+
+static bool s_kwinMenuTranslucent = false;
 
 Q_LOGGING_CATEGORY(KWIN_LIQUIDGLASS, "kwin_effect_liquidglass", QtWarningMsg)
 
@@ -90,6 +98,9 @@ static QMatrix4x4 colorTransformMatrix(qreal saturation, qreal contrast)
 
 LiquidGlassEffect::LiquidGlassEffect()
 {
+    if (QCoreApplication::instance()) {
+        QCoreApplication::instance()->installEventFilter(this);
+    }
     LiquidGlassConfig::instance(effects->config());
     ensureResources();
 
@@ -191,6 +202,9 @@ LiquidGlassEffect::LiquidGlassEffect()
 
 LiquidGlassEffect::~LiquidGlassEffect()
 {
+    if (QCoreApplication::instance()) {
+        QCoreApplication::instance()->removeEventFilter(this);
+    }
     waylandServer()->backgroundEffectManager()->removeBlurCapability();
 }
 
@@ -253,6 +267,7 @@ void LiquidGlassEffect::initBlurStrengthValues()
 }
 
 static qreal s_frameRadius = 30.0;
+static qreal s_dockRadius = 14.0;
 static bool s_forceMenu = true;
 static bool s_forceTooltip = false;
 static bool s_forcePlasmaPopup = true;
@@ -306,6 +321,8 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
             s_forceMenu = words.contains(QStringLiteral("menu"));
             s_forceTooltip = words.contains(QStringLiteral("tooltip"));
             s_forcePlasmaPopup = words.contains(QStringLiteral("plasmapopup"));
+            s_kwinMenuTranslucent = words.contains(QStringLiteral("kwinmenu"));
+            qCWarning(KWIN_LIQUIDGLASS) << "kwinmenu translucent:" << s_kwinMenuTranslucent;
         }
         qCWarning(KWIN_LIQUIDGLASS) << "force glass: menu" << s_forceMenu << "tooltip" << s_forceTooltip << "plasmapopup" << s_forcePlasmaPopup;
     }
@@ -315,12 +332,15 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
             const QStringList rows = QString::fromUtf8(roundFile.readAll()).split(QChar(10), Qt::SkipEmptyParts);
             for (const QString &row : rows) {
                 const QStringList rw = row.simplified().split(QChar(32), Qt::SkipEmptyParts);
+                if (rw.size() >= 2 && rw[0] == QStringLiteral("dock")) {
+                    s_dockRadius = qBound(0.0, rw[1].toDouble(), 100.0);
+                }
                 if (rw.size() >= 2 && rw[0] == QStringLiteral("menu")) {
                     s_menuRadius = qBound(0.0, rw[1].toDouble(), 100.0);
                 }
             }
         }
-        qCWarning(KWIN_LIQUIDGLASS) << "menu radius setting:" << s_menuRadius;
+        qCWarning(KWIN_LIQUIDGLASS) << "menu radius setting:" << s_menuRadius << "dock" << s_dockRadius;
     }
     if (m_valid) {
         const auto policyWindows = effects->stackingOrder();
@@ -342,6 +362,7 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
     // Update all windows for the blur to take effect
     effects->addRepaintFull();
 }
+
 
 static float glassKindOf(EffectWindow *w)
 {
@@ -518,6 +539,17 @@ void LiquidGlassEffect::setupDecorationConnections(EffectWindow *w)
 
 bool LiquidGlassEffect::eventFilter(QObject *watched, QEvent *event)
 {
+    if (s_kwinMenuTranslucent && (event->type() == QEvent::Polish || event->type() == QEvent::Show)) {
+        if (auto *menuWidget = qobject_cast<QWidget *>(watched)) {
+            if (menuWidget->isWindow() && menuWidget->inherits("QMenu") && !menuWidget->testAttribute(Qt::WA_TranslucentBackground)) {
+                menuWidget->setAttribute(Qt::WA_TranslucentBackground, true);
+                static int menuTranslucentLogs = 0;
+                if (menuTranslucentLogs++ < 20) {
+                    qCWarning(KWIN_LIQUIDGLASS) << "menu translucent set" << menuWidget->metaObject()->className() << (event->type() == QEvent::Polish ? "polish" : "show");
+                }
+            }
+        }
+    }
     auto internal = qobject_cast<QWindow *>(watched);
     if (internal && event->type() == QEvent::DynamicPropertyChange) {
         QDynamicPropertyChangeEvent *pe = static_cast<QDynamicPropertyChangeEvent *>(event);
@@ -961,6 +993,9 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
                 Window *gw = w->window();
                 const bool roundedFrame = !w->isFullScreen() && gw->maximizeMode() == MaximizeRestore && !gw->tile() && !gw->requestedTile();
                 rr = (roundedFrame ? float(s_frameRadius) : 1.0f) * float(viewport.scale());
+            }
+            if (!w->hasDecoration() && w->isDock()) {
+                rr = float(s_dockRadius) * float(viewport.scale());
             }
             if (!w->hasDecoration() && glassKindOf(w) == 1.0f) {
                 rr = float(s_menuRadius) * float(viewport.scale());

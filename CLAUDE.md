@@ -119,3 +119,31 @@ Status when this log was written: the global rounding plugins were installed on 
 4. Auto tier by GPU at login.
 5. Corner transparency and the dock plate.
 6. Later: animated context menus, a blinking glass at the top of the screen seen once, wobbly plus glass (own deformation, then a water-drop merge of two windows), lag numbers never collected.
+
+## Session log 2026-11-05 to 2026-11-08 (supersedes older status where it conflicts)
+
+### Verified (log line or screenshot)
+- Automatic rebuild after kwin 6.8.2-2.1: version file matched, both effects loaded, login guards stable.
+- Titlebar (window operations) menu: a KWin internal QMenu (popupWindow true, empty class and caption). Glass was already drawn behind it, but the body was opaque. A widget probe showed translucent false; a grab probe showed alpha ff with fill 333333. Fix: the kwinmenu word in force_glass makes an application event filter in the glass plugin set WA_TranslucentBackground on QMenu top-levels at Polish and Show; in the Kvantum theme svg the three menu-normal fill-opacity 1 entries (menu-normal, menu-normal-left, menu-normal-topleft) went to 0. Confirmed by screenshot.
+- Black 1 px line around menus: the menu surface has a 4 px ring (frame 447x256, blur region inner 4,4 439x248, Kvantum menu_shadow_depth 4). The round mask now uses the inner rect (bounding rect of the surface blur region) for menus (kind 2) and the dock (kind 3), and the frame rect for decorated frames (kind 1). Outside the rounded rect the original shadow is replaced by a rounded one from the shadow row in round.conf (strength size yoffset); strength 0 means no shadow. Dock body inner rect 8,8 653x71 in a 669x87 frame.
+- Dock: the glass plugin now reads the dock radius from round.conf instead of a hardcoded 14; dock 32 10 looks right.
+- Tooltips: Sweet-mars widgets/tooltip.svgz, 9 body fills (5 edges and 4 corners, fill 1a1e21 fill-opacity 1) set to 0, force_glass word tooltip, round.conf tooltips 1. Confirmed by screenshot.
+- Decorated frames: the square shadow outline around rounded corners is gone (checked over white). Real shadow margins of frames are 10 px per side.
+
+### Lessons
+- The KWin QPA Window format is never set, so alphaBuf -1 of internal windows means nothing; the backing store is always ARGB8888.
+- Count the real matches before patching theme files (the tooltip svg had 9 fills, not 5).
+- A running kwin keeps the first loaded plugin copy: install first, then log out and in.
+- KWin scripts log with console.warn; window geometry properties are KWin::RectF. Check names in the source first.
+- A temporary green shader shows the real glass footprint; sample screenshot pixels instead of guessing.
+- Theme edits live outside the repo (Kvantum svg, Sweet-mars tooltip.svgz, backups .pre-menuglass and .pre-tooltipglass) and are not committed because they are third-party files.
+
+### Not verified yet
+- The per-window inner rect cache that should hide the menu outline during the fade-out.
+- A 1 px gray line along the top and left of window frames that stops at the arc.
+
+### Open items
+1. Window button decoration idea (ripple or glow, user has not specified it yet).
+2. Auto tier by GPU at login.
+3. Launcher shader precision fix for NVIDIA (parked, NVIDIA not tested for now).
+4. Animated context menus, GTK and Brave menus, notifications, wobbly plus glass.

@@ -1,1 +1,4 @@
-menu plasmapopup
+menu
+plasmapopup
+kwinmenu
+tooltip
