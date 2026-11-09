@@ -85,6 +85,7 @@ void LiquidGlassRoundEffect::readConfig()
 {
     m_radius = readFrameRadius(m_radius);
     m_shadowActive = true;
+    m_keyClass.clear();
     QFile file(QDir::homePath() + QStringLiteral("/.config/liquidglass/round.conf"));
     if (file.open(QIODevice::ReadOnly)) {
         const QStringList rows = QString::fromUtf8(file.readAll()).split(QChar(10), Qt::SkipEmptyParts);
@@ -102,6 +103,10 @@ void LiquidGlassRoundEffect::readConfig()
                 }
             } else if (parts[0] == QStringLiteral("tooltips")) {
                 m_roundTooltips = (parts[1] == QStringLiteral("1"));
+            } else if (parts[0] == QStringLiteral("key") && parts.size() >= 7) {
+                m_keyClass = parts[1];
+                m_keyColor = QVector4D(float(std::clamp(parts[2].toDouble() / 255.0, 0.0, 1.0)), float(std::clamp(parts[3].toDouble() / 255.0, 0.0, 1.0)), float(std::clamp(parts[4].toDouble() / 255.0, 0.0, 1.0)), float(std::clamp(parts[5].toDouble(), 0.0, 1.0)));
+                m_keyMin = float(std::clamp(parts[6].toDouble(), 0.0, 1.0));
             } else if (parts[0] == QStringLiteral("shadow")) {
                 m_shadowActive = true;
                 m_shadowStrength = std::clamp(parts[1].toDouble(), 0.0, 1.0);
@@ -114,7 +119,7 @@ void LiquidGlassRoundEffect::readConfig()
             }
         }
     }
-    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset;
+    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset << "key" << m_keyClass << m_keyColor << m_keyMin;
 }
 
 void LiquidGlassRoundEffect::reconfigure(ReconfigureFlags flags)
@@ -289,6 +294,16 @@ bool LiquidGlassRoundEffect::drawWindow(const RenderTarget &renderTarget, const 
             }
             const double shadowOn = innerMode ? m_shadowStrength : 0.0;
             m_shader->setUniform("shadowParams", QVector4D(float(shadowOn), float(m_shadowSize * scale), float(m_shadowOffset * scale), innerMode ? 1.0f : 0.0f));
+            bool keyOn = false;
+            if (kind == 2 && !m_keyClass.isEmpty() && w->window() && w->window()->resourceClass().contains(m_keyClass, Qt::CaseInsensitive)) {
+                keyOn = true;
+                static int keyLogs = 0;
+                if (keyLogs++ < 5) {
+                    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: key applied to" << w->window()->resourceClass();
+                }
+            }
+            m_shader->setUniform("keyColor", m_keyColor);
+            m_shader->setUniform("keyParams", QVector4D(keyOn ? 1.0f : 0.0f, m_keyMin, 0.0f, 0.0f));
             static int marginLogs = 0;
             static int frameMarginLogs = 0;
             if (kind == 1 && frameMarginLogs++ < 8) {

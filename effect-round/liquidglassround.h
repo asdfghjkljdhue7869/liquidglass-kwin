@@ -2,6 +2,8 @@
 
 #include "effect/offscreeneffect.h"
 
+#include <QString>
+#include <QVector4D>
 #include <array>
 #include <memory>
 #include <unordered_map>
@@ -52,6 +54,9 @@ private:
     qreal m_shadowSize = 12.0;
     qreal m_shadowOffset = 3.0;
     bool m_shadowActive = false;
+    QString m_keyClass;
+    QVector4D m_keyColor = QVector4D(0.0f, 0.0f, 0.0f, 0.05f);
+    float m_keyMin = 0.0f;
     std::unordered_map<EffectWindow *, std::array<double, 4>> m_innerRects;
 };
 

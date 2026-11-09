@@ -147,3 +147,19 @@ Status when this log was written: the global rounding plugins were installed on 
 2. Auto tier by GPU at login.
 3. Launcher shader precision fix for NVIDIA (parked, NVIDIA not tested for now).
 4. Animated context menus, GTK and Brave menus, notifications, wobbly plus glass.
+
+## Session log 2026-11-08 to 2026-11-09 (Brave menus)
+
+### Verified (log line or screenshot)
+- Brave Origin (/opt/brave-origin-bin/brave) menus are popups of class brave with popupWindow true and type -1; the buffer is 24 px larger than the frame on every side, which points to native Wayland popups. Glass was already forced behind them by the menu word; the body was opaque.
+- Menu body color is flat (34,34,35); text is (227,227,228); separators (42,42,43). Brave draws a dark-theme menu with subpixel text.
+- Color key in the round mask shader: round.conf row key CLASS R G B RANGE MINALPHA. Pixels near the key color become see-through down to MINALPHA, applied to popups (kind 2) of that class only, on the un-premultiplied color so it also works while a menu fades in. Log line: round: key applied to brave. Edit round.conf and run reconfigureEffect liquidglassround to tune live.
+- MINALPHA: 0.10 was too bright over white pages (light text on light glass, about 1.1:1), 0.55 looked too heavy against the rest of the OS; the user settled on the value from the 0.25 trial (the live value is in install/round.conf.example).
+
+### Not verified
+- The gray flash when a menu opens is not confirmed gone.
+- glass off with Brave open: only the nested regression unloaded the round effect, never against live Brave windows; close Brave first.
+- Subpixel text fringes (orange and blue) over bright glass; the user would like the text to matter more (brighter text with a faint dark halo is an idea, not built).
+
+### Ideas
+- Adaptive body alpha from the backdrop brightness; several key rows so other classes (GTK, other Chromium apps) can use the color key.

@@ -25,6 +25,8 @@ uniform vec4 geometryColor;
 uniform vec4 box;
 uniform vec4 cornerRadius;
 uniform vec4 shadowParams;
+uniform vec4 keyColor;
+uniform vec4 keyParams;
 in vec2 position0;
 #endif
 
@@ -76,6 +78,10 @@ void main(void)
 #if TRAIT_ROUNDED_CORNERS
     float f = sdfRoundedBox(position0, box.xy, box.zw, cornerRadius);
     float df = fwidth(f);
+    if (keyParams.x > 0.5 && result.a > 0.01) {
+        float kd = distance(result.rgb / result.a, keyColor.rgb);
+        result *= mix(keyParams.y, 1.0, smoothstep(0.0, max(keyColor.a, 0.001), kd));
+    }
     if (shadowParams.w > 0.5) {
         float cover = 1.0 - clamp(0.5 + f / df, 0.0, 1.0);
         float fs = sdfRoundedBox(position0 - vec2(0.0, shadowParams.z), box.xy, box.zw, cornerRadius);
