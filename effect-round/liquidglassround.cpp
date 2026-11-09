@@ -19,8 +19,12 @@
 #include <QVector4D>
 
 #include <algorithm>
+#include <cmath>
 
 #include "roundshader.h"
+
+static constexpr int kDropRectRole = 5101;
+static constexpr int kDropRadiusRole = 5102;
 
 Q_LOGGING_CATEGORY(KWIN_LIQUIDGLASSROUND, "kwin_effect_liquidglassround", QtWarningMsg)
 
@@ -58,6 +62,7 @@ LiquidGlassRoundEffect::LiquidGlassRoundEffect()
     for (EffectWindow *w : windows) {
         slotWindowAdded(w);
     }
+    m_loading = false;
     qCWarning(KWIN_LIQUIDGLASSROUND) << "round: loaded, radius" << m_radius;
 }
 
@@ -68,6 +73,11 @@ LiquidGlassRoundEffect::~LiquidGlassRoundEffect()
         unredirect(entry.first);
     }
     m_redirected.clear();
+    for (const auto &entry : m_drops) {
+        entry.first->setData(kDropRectRole, QVariant());
+        entry.first->setData(kDropRadiusRole, QVariant());
+    }
+    m_drops.clear();
     m_shader.reset();
 }
 
@@ -86,6 +96,12 @@ void LiquidGlassRoundEffect::readConfig()
     m_radius = readFrameRadius(m_radius);
     m_shadowActive = true;
     m_keyClass.clear();
+    m_dropMs = 0;
+    m_dropLag = 0.35;
+    m_dropHold = 0.55;
+    m_dropFade0 = 0.10;
+    m_dropFade1 = 0.55;
+    m_dropR0 = 7.0;
     QFile file(QDir::homePath() + QStringLiteral("/.config/liquidglass/round.conf"));
     if (file.open(QIODevice::ReadOnly)) {
         const QStringList rows = QString::fromUtf8(file.readAll()).split(QChar(10), Qt::SkipEmptyParts);
@@ -103,6 +119,23 @@ void LiquidGlassRoundEffect::readConfig()
                 }
             } else if (parts[0] == QStringLiteral("tooltips")) {
                 m_roundTooltips = (parts[1] == QStringLiteral("1"));
+            } else if (parts[0] == QStringLiteral("drop")) {
+                m_dropMs = std::clamp(parts[1].toInt(), 0, 1500);
+                if (parts.size() >= 3) {
+                    m_dropR0 = std::clamp(parts[2].toDouble(), 5.0, 40.0);
+                    if (parts.size() >= 4) {
+                        m_dropLag = std::clamp(parts[3].toDouble(), 0.0, 0.8);
+                    }
+                    if (parts.size() >= 5) {
+                        m_dropHold = std::clamp(parts[4].toDouble(), 0.0, 0.9);
+                    }
+                    if (parts.size() >= 6) {
+                        m_dropFade0 = std::clamp(parts[5].toDouble(), 0.0, 0.9);
+                    }
+                    if (parts.size() >= 7) {
+                        m_dropFade1 = std::clamp(parts[6].toDouble(), m_dropFade0 + 0.05, 1.0);
+                    }
+                }
             } else if (parts[0] == QStringLiteral("key") && parts.size() >= 7) {
                 m_keyClass = parts[1];
                 m_keyColor = QVector4D(float(std::clamp(parts[2].toDouble() / 255.0, 0.0, 1.0)), float(std::clamp(parts[3].toDouble() / 255.0, 0.0, 1.0)), float(std::clamp(parts[4].toDouble() / 255.0, 0.0, 1.0)), float(std::clamp(parts[5].toDouble(), 0.0, 1.0)));
@@ -119,7 +152,7 @@ void LiquidGlassRoundEffect::readConfig()
             }
         }
     }
-    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset << "key" << m_keyClass << m_keyColor << m_keyMin;
+    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset << "key" << m_keyClass << m_keyColor << m_keyMin << "drop" << m_dropMs << m_dropR0 << m_dropLag << m_dropHold << m_dropFade0 << m_dropFade1;
 }
 
 void LiquidGlassRoundEffect::reconfigure(ReconfigureFlags flags)
@@ -192,6 +225,12 @@ void LiquidGlassRoundEffect::updateWindow(EffectWindow *w)
 
 void LiquidGlassRoundEffect::slotWindowAdded(EffectWindow *w)
 {
+    if (m_dropMs > 0 && !m_loading && !w->isTooltip() && (w->isPopupWindow() || w->isPopupMenu() || w->isDropdownMenu() || w->isMenu() || w->isComboBox()) && kindOf(w) == 2) {
+        DropState st;
+        st.anchor = effects->cursorPos();
+        st.added = std::chrono::steady_clock::now();
+        m_drops[w] = st;
+    }
     QPointer<EffectWindow> guard(w);
     auto refresh = [this, guard]() {
         if (guard) {
@@ -213,6 +252,7 @@ void LiquidGlassRoundEffect::slotWindowDeleted(EffectWindow *w)
 {
     m_redirected.erase(w);
     m_innerRects.erase(w);
+    m_drops.erase(w);
 }
 
 void LiquidGlassRoundEffect::prePaintWindow(RenderView *view, EffectWindow *w, WindowPrePaintData &data)
@@ -220,7 +260,103 @@ void LiquidGlassRoundEffect::prePaintWindow(RenderView *view, EffectWindow *w, W
     if (m_redirected.contains(w)) {
         data.setTranslucent();
     }
+    tickDrop(w);
     effects->prePaintWindow(view, w, data);
+}
+
+void LiquidGlassRoundEffect::postPaintScreen()
+{
+    for (const auto &entry : m_drops) {
+        effects->addRepaint(entry.first->expandedGeometry());
+    }
+    effects->postPaintScreen();
+}
+
+void LiquidGlassRoundEffect::tickDrop(EffectWindow *w)
+{
+    const auto it = m_drops.find(w);
+    if (it == m_drops.end()) {
+        return;
+    }
+    DropState &st = it->second;
+    const auto now = std::chrono::steady_clock::now();
+    if (!st.started) {
+        st.started = true;
+        st.start = now;
+        static int dropLogs = 0;
+        if (dropLogs++ < 12) {
+            const double waited = std::chrono::duration<double, std::milli>(now - st.added).count();
+            qCWarning(KWIN_LIQUIDGLASSROUND) << "round: drop start anchor" << st.anchor << "ms" << m_dropMs << "waitedForFirstPaint" << waited;
+        }
+    }
+    st.frames++;
+    const double elapsed = std::chrono::duration<double, std::milli>(now - st.start).count();
+    const double t = elapsed / double(std::max(m_dropMs, 1));
+    if (t >= 1.0 || !m_redirected.contains(w)) {
+        static int endLogs = 0;
+        if (endLogs++ < 12) {
+            qCWarning(KWIN_LIQUIDGLASSROUND) << "round: drop end frames" << st.frames << "elapsedMs" << elapsed;
+        }
+        w->setData(kDropRectRole, QVariant());
+        w->setData(kDropRadiusRole, QVariant());
+        m_drops.erase(it);
+        return;
+    }
+    const RectF frame = w->frameGeometry();
+    RectF inner(0.0, 0.0, frame.width(), frame.height());
+    if (SurfaceInterface *surf = w->surface()) {
+        const RegionF blurReg = surf->blurRegion();
+        if (!blurReg.isEmpty()) {
+            inner = blurReg.boundingRect().intersected(inner);
+        }
+    }
+    const double ax = std::clamp(st.anchor.x() - frame.x(), inner.left(), inner.right());
+    const double ay = std::clamp(st.anchor.y() - frame.y(), inner.top(), inner.bottom());
+    double dx = (inner.left() + inner.right()) * 0.5 - ax;
+    double dy = (inner.top() + inner.bottom()) * 0.5 - ay;
+    const double len = std::hypot(dx, dy);
+    if (len > 1e-3) {
+        dx /= len;
+        dy /= len;
+    } else {
+        dx = 0.0;
+        dy = 0.0;
+    }
+    auto lead = [&](double nx, double ny) {
+        return std::clamp(0.5 + 0.5 * (nx * dx + ny * dy), 0.0, 1.0);
+    };
+    auto edge = [&](double leadValue) {
+        const double d = m_dropLag * (1.0 - leadValue);
+        const double te = std::clamp((t - d) / (1.0 - d), 0.0, 1.0);
+        return 1.0 - std::pow(1.0 - te, 3.0);
+    };
+    const double sl = ax - m_dropR0;
+    const double stp = ay - m_dropR0;
+    const double sr = ax + m_dropR0;
+    const double sb = ay + m_dropR0;
+    const double l = sl + (inner.left() - sl) * edge(lead(-1.0, 0.0));
+    const double tp = stp + (inner.top() - stp) * edge(lead(0.0, -1.0));
+    const double r = sr + (inner.right() - sr) * edge(lead(1.0, 0.0));
+    const double b = sb + (inner.bottom() - sb) * edge(lead(0.0, 1.0));
+    const double nxs[4] = {-1.0, 1.0, -1.0, 1.0};
+    const double nys[4] = {-1.0, -1.0, 1.0, 1.0};
+    const double finalRadius = std::min(m_menuRadius, std::min(inner.width(), inner.height()) * 0.5);
+    const double pill = std::min(r - l, b - tp) * 0.5;
+    for (int c = 0; c < 4; ++c) {
+        const double lc = lead(nxs[c] * 0.70710678, nys[c] * 0.70710678);
+        const double hold = m_dropHold * (0.4 + 0.6 * lc);
+        const double rt = std::clamp((t - hold) / std::max(1.0 - hold, 0.05), 0.0, 1.0);
+        const double sm = rt * rt * (3.0 - 2.0 * rt);
+        st.radv[c] = std::max(0.0, pill + (finalRadius - pill) * sm);
+    }
+    st.rect[0] = l;
+    st.rect[1] = tp;
+    st.rect[2] = r;
+    st.rect[3] = b;
+    const double ft = std::clamp((t - m_dropFade0) / std::max(m_dropFade1 - m_dropFade0, 0.05), 0.0, 1.0);
+    st.fade = ft * ft * (3.0 - 2.0 * ft);
+    w->setData(kDropRectRole, QRectF(frame.x() + l, frame.y() + tp, r - l, b - tp));
+    w->setData(kDropRadiusRole, QVariant::fromValue(QVector4D(float(st.radv[0]), float(st.radv[1]), float(st.radv[2]), float(st.radv[3]))));
 }
 
 bool LiquidGlassRoundEffect::drawWindow(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const Region &deviceRegion, WindowPaintData &data)
@@ -258,6 +394,7 @@ bool LiquidGlassRoundEffect::drawWindow(const RenderTarget &renderTarget, const 
             ShaderBinder binder(m_shader.get());
             m_shader->setUniform(GLShader::Vec4Uniform::Box, QVector4D(bw * 0.5, bh * 0.5, ex, ey));
             m_shader->setUniform(GLShader::Vec4Uniform::CornerRadius, QVector4D(rad, rad, rad, rad));
+            double dropFade = 1.0;
             bool innerMode = false;
             if (m_shadowActive) {
                 RectF inner(0.0, 0.0, frame.width(), frame.height());
@@ -277,14 +414,34 @@ bool LiquidGlassRoundEffect::drawWindow(const RenderTarget &renderTarget, const 
                         inner = RectF(cached->second[0], cached->second[1], cached->second[2], cached->second[3]);
                     }
                 }
+                double dropRadius = -1.0;
+                double dropRad4[4] = {0.0, 0.0, 0.0, 0.0};
+                bool dropHas4 = false;
+                {
+                    const auto dit = m_drops.find(w);
+                    if (dit != m_drops.end() && dit->second.started) {
+                        inner = RectF(dit->second.rect[0], dit->second.rect[1], dit->second.rect[2] - dit->second.rect[0], dit->second.rect[3] - dit->second.rect[1]);
+                        dropRadius = dit->second.radv[0];
+                        dropHas4 = true;
+                        for (int ci = 0; ci < 4; ++ci) {
+                            dropRad4[ci] = dit->second.radv[ci];
+                        }
+                        dropFade = dit->second.fade;
+                    }
+                }
                 if (inner.width() > 8.0 && inner.height() > 8.0) {
                     const double hx = inner.width() * 0.5 * scale;
                     const double hy = inner.height() * 0.5 * scale;
                     const double cx = (inner.x() + inner.width() * 0.5) * scale;
                     const double cy = (inner.y() + inner.height() * 0.5) * scale;
-                    const double r2 = std::max(0.0, std::min(radius * scale, std::min(hx, hy)));
+                    const double r2 = std::max(0.0, std::min((dropRadius >= 0.0 ? dropRadius : radius) * scale, std::min(hx, hy)));
                     m_shader->setUniform(GLShader::Vec4Uniform::Box, QVector4D(cx, cy, hx, hy));
-                    m_shader->setUniform(GLShader::Vec4Uniform::CornerRadius, QVector4D(r2, r2, r2, r2));
+                    const double cap = std::min(hx, hy);
+                    if (dropHas4) {
+                        m_shader->setUniform(GLShader::Vec4Uniform::CornerRadius, QVector4D(float(std::min(dropRad4[0] * scale, cap)), float(std::min(dropRad4[1] * scale, cap)), float(std::min(dropRad4[2] * scale, cap)), float(std::min(dropRad4[3] * scale, cap))));
+                    } else {
+                        m_shader->setUniform(GLShader::Vec4Uniform::CornerRadius, QVector4D(r2, r2, r2, r2));
+                    }
                     innerMode = true;
                     static int innerLogs = 0;
                     if (innerLogs++ < 40) {
@@ -303,7 +460,7 @@ bool LiquidGlassRoundEffect::drawWindow(const RenderTarget &renderTarget, const 
                 }
             }
             m_shader->setUniform("keyColor", m_keyColor);
-            m_shader->setUniform("keyParams", QVector4D(keyOn ? 1.0f : 0.0f, m_keyMin, 0.0f, 0.0f));
+            m_shader->setUniform("keyParams", QVector4D(keyOn ? 1.0f : 0.0f, m_keyMin, float(dropFade), 0.0f));
             static int marginLogs = 0;
             static int frameMarginLogs = 0;
             if (kind == 1 && frameMarginLogs++ < 8) {

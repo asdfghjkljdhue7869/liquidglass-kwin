@@ -163,3 +163,20 @@ Status when this log was written: the global rounding plugins were installed on 
 
 ### Ideas
 - Adaptive body alpha from the backdrop brightness; several key rows so other classes (GTK, other Chromium apps) can use the color key.
+
+## Session log 2026-11-09 (popup droplet animation)
+
+### Verified (log line, screenshot or screencast)
+- When a popup, popup menu, dropdown, menu or combo box (not tooltips, notifications or panel windows) appears, the round effect animates the visible shape from a small circle at the cursor to the inner rect. The mask clips the window to the shape and the glass plugin draws its glass in the same shape through window data roles 5101 (rect, global coordinates) and 5102 (QVector4D corner radii). The window itself is never scaled, so glass stays active and WindowForceBlurRole is not needed.
+- Shape: per-edge lag (edges facing the cursor to menu direction move first), a pill shape that tightens to the menu radius late, per-corner radii, and a content fade through keyParams.z. Row in round.conf: drop MS R0 LAG HOLD FADE0 FADE1 (no row or MS 0 means off). Approved by the user with drop 340 7 0.40 0.60 0.00 0.30; live tuning with reconfigureEffect liquidglassround.
+- Logs: round: drop start / drop end lines (first 12 per session only). waitedForFirstPaint was 0.2 to 12 ms and about 17 frames ran in 260 ms.
+- A screencast of the first version showed the shape complete in about 100 ms (cubic ease-out) and the menu text fading in later than the shape (fade started at 10 percent with a smoothstep). Fixed by tuning the row, no code change.
+
+### Not verified
+- Click to popup latency (Brave may create the menu late); there is no pointer press log.
+- Stock Fading Popups is still loaded and also fades menus.
+- The nested tests cannot exercise popups; they only prove build, shader compile and crash safety.
+- Undecorated Electron windows with their own title bar get no rounding or glass cleanup.
+
+### Ideas
+- Softer easing exponent as a drop parameter; water drop merge of two windows; glass on wobbly windows; overview needs a QML fork (its blur is a QML FastBlur); several key rows for other classes; auto tier by GPU.

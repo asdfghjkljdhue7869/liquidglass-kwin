@@ -1009,6 +1009,17 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
             boxUniform = QVector4D(bw * 0.5f, bh * 0.5f, bw * 0.5f, bh * 0.5f);
             radiusUniform = QVector4D(rr, rr, rr, rr);
         }
+        if (w->data(5101).isValid()) {
+            const QRectF dr = w->data(5101).toRectF();
+            const QVector4D dv = w->data(5102).value<QVector4D>();
+            const double sc = viewport.scale();
+            const double lx = dr.x() * sc - scaledBackgroundRect.x();
+            const double ly = dr.y() * sc - scaledBackgroundRect.y();
+            boxUniform = QVector4D(float(lx + dr.width() * sc * 0.5), float(ly + dr.height() * sc * 0.5), float(dr.width() * sc * 0.5), float(dr.height() * sc * 0.5));
+            const double cap2 = qMin(dr.width(), dr.height()) * sc * 0.5;
+            const QVector4D rv(float(qMax(0.0, qMin(double(dv.x()) * sc, cap2))), float(qMax(0.0, qMin(double(dv.y()) * sc, cap2))), float(qMax(0.0, qMin(double(dv.z()) * sc, cap2))), float(qMax(0.0, qMin(double(dv.w()) * sc, cap2))));
+            radiusUniform = rv;
+        }
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.boxLocation, boxUniform);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, radiusUniform);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.opacityLocation, modulation);

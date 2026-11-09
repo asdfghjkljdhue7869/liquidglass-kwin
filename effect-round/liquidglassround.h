@@ -5,6 +5,8 @@
 #include <QString>
 #include <QVector4D>
 #include <array>
+#include <chrono>
+#include <QPointF>
 #include <memory>
 #include <unordered_map>
 
@@ -27,6 +29,7 @@ public:
     void reconfigure(ReconfigureFlags flags) override;
     void prePaintWindow(RenderView *view, EffectWindow *w, WindowPrePaintData &data) override;
     bool drawWindow(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const Region &deviceRegion, WindowPaintData &data) override;
+    void postPaintScreen() override;
     bool isActive() const override;
 
     int requestedEffectChainPosition() const override
@@ -57,6 +60,25 @@ private:
     QString m_keyClass;
     QVector4D m_keyColor = QVector4D(0.0f, 0.0f, 0.0f, 0.05f);
     float m_keyMin = 0.0f;
+    struct DropState {
+        bool started = false;
+        std::chrono::steady_clock::time_point added;
+        int frames = 0;
+        std::chrono::steady_clock::time_point start;
+        QPointF anchor;
+        double rect[4] = {0.0, 0.0, 0.0, 0.0};
+        double radv[4] = {0.0, 0.0, 0.0, 0.0};
+        double fade = 1.0;
+    };
+    std::unordered_map<EffectWindow *, DropState> m_drops;
+    int m_dropMs = 0;
+    double m_dropR0 = 7.0;
+    double m_dropLag = 0.35;
+    double m_dropHold = 0.55;
+    double m_dropFade0 = 0.10;
+    double m_dropFade1 = 0.55;
+    bool m_loading = true;
+    void tickDrop(EffectWindow *w);
     std::unordered_map<EffectWindow *, std::array<double, 4>> m_innerRects;
 };
 

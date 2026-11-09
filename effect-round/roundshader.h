@@ -82,6 +82,7 @@ void main(void)
         float kd = distance(result.rgb / result.a, keyColor.rgb);
         result *= mix(keyParams.y, 1.0, smoothstep(0.0, max(keyColor.a, 0.001), kd));
     }
+    result *= keyParams.z;
     if (shadowParams.w > 0.5) {
         float cover = 1.0 - clamp(0.5 + f / df, 0.0, 1.0);
         float fs = sdfRoundedBox(position0 - vec2(0.0, shadowParams.z), box.xy, box.zw, cornerRadius);
