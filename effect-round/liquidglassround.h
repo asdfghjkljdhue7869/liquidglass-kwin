@@ -63,6 +63,9 @@ private:
     struct DropState {
         bool started = false;
         std::chrono::steady_clock::time_point added;
+        bool quick = false;
+        bool hasStart = false;
+        double startRect[4] = {0.0, 0.0, 0.0, 0.0};
         int frames = 0;
         std::chrono::steady_clock::time_point start;
         QPointF anchor;
@@ -77,6 +80,12 @@ private:
     double m_dropHold = 0.55;
     double m_dropFade0 = 0.10;
     double m_dropFade1 = 0.55;
+    int m_dropQuickMs = 240;
+    int m_dropChainMs = 900;
+    std::chrono::steady_clock::time_point m_lastPopupEvent;
+    std::chrono::steady_clock::time_point m_lastCloseTime;
+    double m_lastRect[4] = {0.0, 0.0, 0.0, 0.0};
+    bool m_lastRectValid = false;
     bool m_loading = true;
     void tickDrop(EffectWindow *w);
     std::unordered_map<EffectWindow *, std::array<double, 4>> m_innerRects;

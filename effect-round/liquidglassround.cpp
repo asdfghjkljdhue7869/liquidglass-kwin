@@ -58,6 +58,36 @@ LiquidGlassRoundEffect::LiquidGlassRoundEffect()
     readConfig();
     connect(effects, &EffectsHandler::windowAdded, this, &LiquidGlassRoundEffect::slotWindowAdded);
     connect(effects, &EffectsHandler::windowDeleted, this, &LiquidGlassRoundEffect::slotWindowDeleted);
+    connect(effects, &EffectsHandler::windowClosed, this, [this](EffectWindow *cw) {
+        if (cw && (cw->isPopupWindow() || cw->isPopupMenu() || cw->isDropdownMenu() || cw->isMenu() || cw->isComboBox())) {
+            m_lastPopupEvent = std::chrono::steady_clock::now();
+            m_lastCloseTime = m_lastPopupEvent;
+            const RectF cf = cw->frameGeometry();
+            double rx = 0.0;
+            double ry = 0.0;
+            double rw = cf.width();
+            double rh = cf.height();
+            const auto ci = m_innerRects.find(cw);
+            if (ci != m_innerRects.end()) {
+                rx = ci->second[0];
+                ry = ci->second[1];
+                rw = ci->second[2];
+                rh = ci->second[3];
+            }
+            const auto di = m_drops.find(cw);
+            if (di != m_drops.end() && di->second.started) {
+                rx = di->second.rect[0];
+                ry = di->second.rect[1];
+                rw = di->second.rect[2] - di->second.rect[0];
+                rh = di->second.rect[3] - di->second.rect[1];
+            }
+            m_lastRect[0] = cf.x() + rx;
+            m_lastRect[1] = cf.y() + ry;
+            m_lastRect[2] = rw;
+            m_lastRect[3] = rh;
+            m_lastRectValid = rw > 8.0 && rh > 8.0;
+        }
+    });
     const auto windows = effects->stackingOrder();
     for (EffectWindow *w : windows) {
         slotWindowAdded(w);
@@ -101,6 +131,8 @@ void LiquidGlassRoundEffect::readConfig()
     m_dropHold = 0.55;
     m_dropFade0 = 0.10;
     m_dropFade1 = 0.55;
+    m_dropQuickMs = 240;
+    m_dropChainMs = 900;
     m_dropR0 = 7.0;
     QFile file(QDir::homePath() + QStringLiteral("/.config/liquidglass/round.conf"));
     if (file.open(QIODevice::ReadOnly)) {
@@ -135,6 +167,12 @@ void LiquidGlassRoundEffect::readConfig()
                     if (parts.size() >= 7) {
                         m_dropFade1 = std::clamp(parts[6].toDouble(), m_dropFade0 + 0.05, 1.0);
                     }
+                    if (parts.size() >= 8) {
+                        m_dropQuickMs = std::clamp(parts[7].toInt(), 0, 1500);
+                    }
+                    if (parts.size() >= 9) {
+                        m_dropChainMs = std::clamp(parts[8].toInt(), 0, 5000);
+                    }
                 }
             } else if (parts[0] == QStringLiteral("key") && parts.size() >= 7) {
                 m_keyClass = parts[1];
@@ -152,7 +190,7 @@ void LiquidGlassRoundEffect::readConfig()
             }
         }
     }
-    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset << "key" << m_keyClass << m_keyColor << m_keyMin << "drop" << m_dropMs << m_dropR0 << m_dropLag << m_dropHold << m_dropFade0 << m_dropFade1;
+    qCWarning(KWIN_LIQUIDGLASSROUND) << "round: settings frame" << m_radius << "menu" << m_menuRadius << "dock" << m_dockRadius << "inset" << m_dockInset << "tooltips" << m_roundTooltips << "shadow" << m_shadowStrength << m_shadowSize << m_shadowOffset << "key" << m_keyClass << m_keyColor << m_keyMin << "drop" << m_dropMs << m_dropR0 << m_dropLag << m_dropHold << m_dropFade0 << m_dropFade1 << m_dropQuickMs << m_dropChainMs << "morph";
 }
 
 void LiquidGlassRoundEffect::reconfigure(ReconfigureFlags flags)
@@ -229,6 +267,21 @@ void LiquidGlassRoundEffect::slotWindowAdded(EffectWindow *w)
         DropState st;
         st.anchor = effects->cursorPos();
         st.added = std::chrono::steady_clock::now();
+        bool chained = std::chrono::duration<double, std::milli>(st.added - m_lastPopupEvent).count() < double(m_dropChainMs);
+        for (const auto &entry : m_redirected) {
+            EffectWindow *ow = entry.first;
+            if (ow != w && entry.second == 2 && !ow->isDeleted() && (ow->isPopupWindow() || ow->isPopupMenu() || ow->isDropdownMenu() || ow->isMenu() || ow->isComboBox())) {
+                chained = true;
+            }
+        }
+        st.quick = chained;
+        m_lastPopupEvent = st.added;
+        if (st.quick && m_lastRectValid && std::chrono::duration<double, std::milli>(st.added - m_lastCloseTime).count() < double(m_dropChainMs)) {
+            st.hasStart = true;
+            for (int si = 0; si < 4; ++si) {
+                st.startRect[si] = m_lastRect[si];
+            }
+        }
         m_drops[w] = st;
     }
     QPointer<EffectWindow> guard(w);
@@ -284,17 +337,18 @@ void LiquidGlassRoundEffect::tickDrop(EffectWindow *w)
         st.started = true;
         st.start = now;
         static int dropLogs = 0;
-        if (dropLogs++ < 12) {
+        if (dropLogs++ < 60) {
             const double waited = std::chrono::duration<double, std::milli>(now - st.added).count();
-            qCWarning(KWIN_LIQUIDGLASSROUND) << "round: drop start anchor" << st.anchor << "ms" << m_dropMs << "waitedForFirstPaint" << waited;
+            qCWarning(KWIN_LIQUIDGLASSROUND) << "round: drop start anchor" << st.anchor << "ms" << (st.quick ? m_dropQuickMs : m_dropMs) << "quick" << st.quick << "hasStart" << st.hasStart << "waitedForFirstPaint" << waited;
         }
     }
     st.frames++;
     const double elapsed = std::chrono::duration<double, std::milli>(now - st.start).count();
-    const double t = elapsed / double(std::max(m_dropMs, 1));
+    const int durMs = st.quick ? std::max(m_dropQuickMs, 1) : std::max(m_dropMs, 1);
+    const double t = elapsed / double(durMs);
     if (t >= 1.0 || !m_redirected.contains(w)) {
         static int endLogs = 0;
-        if (endLogs++ < 12) {
+        if (endLogs++ < 60) {
             qCWarning(KWIN_LIQUIDGLASSROUND) << "round: drop end frames" << st.frames << "elapsedMs" << elapsed;
         }
         w->setData(kDropRectRole, QVariant());
@@ -330,10 +384,25 @@ void LiquidGlassRoundEffect::tickDrop(EffectWindow *w)
         const double te = std::clamp((t - d) / (1.0 - d), 0.0, 1.0);
         return 1.0 - std::pow(1.0 - te, 3.0);
     };
-    const double sl = ax - m_dropR0;
-    const double stp = ay - m_dropR0;
-    const double sr = ax + m_dropR0;
-    const double sb = ay + m_dropR0;
+    double s0l = ax - m_dropR0;
+    double s0t = ay - m_dropR0;
+    double s0r = ax + m_dropR0;
+    double s0b = ay + m_dropR0;
+    bool usedStart = false;
+    if (st.hasStart) {
+        const RectF sr0 = RectF(st.startRect[0] - frame.x(), st.startRect[1] - frame.y(), st.startRect[2], st.startRect[3]).intersected(inner);
+        if (sr0.width() > 8.0 && sr0.height() > 8.0) {
+            s0l = sr0.left();
+            s0t = sr0.top();
+            s0r = sr0.right();
+            s0b = sr0.bottom();
+            usedStart = true;
+        }
+    }
+    const double sl = s0l;
+    const double stp = s0t;
+    const double sr = s0r;
+    const double sb = s0b;
     const double l = sl + (inner.left() - sl) * edge(lead(-1.0, 0.0));
     const double tp = stp + (inner.top() - stp) * edge(lead(0.0, -1.0));
     const double r = sr + (inner.right() - sr) * edge(lead(1.0, 0.0));
@@ -341,7 +410,7 @@ void LiquidGlassRoundEffect::tickDrop(EffectWindow *w)
     const double nxs[4] = {-1.0, 1.0, -1.0, 1.0};
     const double nys[4] = {-1.0, -1.0, 1.0, 1.0};
     const double finalRadius = std::min(m_menuRadius, std::min(inner.width(), inner.height()) * 0.5);
-    const double pill = std::min(r - l, b - tp) * 0.5;
+    const double pill = usedStart ? std::min(finalRadius * 1.4, std::min(r - l, b - tp) * 0.5) : std::min(r - l, b - tp) * 0.5;
     for (int c = 0; c < 4; ++c) {
         const double lc = lead(nxs[c] * 0.70710678, nys[c] * 0.70710678);
         const double hold = m_dropHold * (0.4 + 0.6 * lc);

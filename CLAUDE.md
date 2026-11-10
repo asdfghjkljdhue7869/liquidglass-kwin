@@ -180,3 +180,14 @@ Status when this log was written: the global rounding plugins were installed on 
 
 ### Ideas
 - Softer easing exponent as a drop parameter; water drop merge of two windows; glass on wobbly windows; overview needs a QML fork (its blur is a QML FastBlur); several key rows for other classes; auto tier by GPU.
+
+## Session log 2026-11-10 (chained popups)
+
+### Verified (log line, screencast or the user by eye)
+- A popup opened while another popup is open, or within CHAINMS after one closed, counts as chained and uses the quick duration. Two variants were tried: a 110 ms quick droplet (the user found it stiff, like a pop) and a morph that starts the shape from the previous popup rect (the user found it like a window resize; a screencast showed the new submenu at nearly full size within one or two frames). The user chose the plain 340 ms droplet from the cursor again.
+- round.conf row: drop MS R0 LAG HOLD FADE0 FADE1 QUICKMS CHAINMS. The approved row is drop 340 7 0.40 0.60 0.00 0.30 340 0: chained popups use 340 ms and a chain window of 0 means the morph never starts. If the last two numbers are missing they default to 240 and 900, which turns the morph on.
+- Log lines (first 60 per session): round: drop start ... quick true or false, hasStart true or false, and round: drop end frames N elapsedMs X. In this build the settings line ends with the word morph.
+
+### Not verified
+- After the final row was loaded the 25 s test captured no drop start line, so the hasStart false case rests on the user eyes only.
+- The user accepts waiting the full 340 ms when switching submenus quickly; a QUICKMS value between 110 and 340 without the morph was not tried.
