@@ -263,7 +263,7 @@ void LiquidGlassRoundEffect::updateWindow(EffectWindow *w)
 
 void LiquidGlassRoundEffect::slotWindowAdded(EffectWindow *w)
 {
-    if (m_dropMs > 0 && !m_loading && !w->isTooltip() && (w->isPopupWindow() || w->isPopupMenu() || w->isDropdownMenu() || w->isMenu() || w->isComboBox()) && kindOf(w) == 2) {
+    if (m_dropMs > 0 && !m_loading && (w->isTooltip() || w->isPopupWindow() || w->isPopupMenu() || w->isDropdownMenu() || w->isMenu() || w->isComboBox()) && kindOf(w) == 2) {
         DropState st;
         st.anchor = effects->cursorPos();
         st.added = std::chrono::steady_clock::now();

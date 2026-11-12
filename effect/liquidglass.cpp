@@ -45,6 +45,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QWindow>
+#include <chrono>
 #include <cmath> // for ceil()
 #include <cstdlib>
 
@@ -268,6 +269,8 @@ void LiquidGlassEffect::initBlurStrengthValues()
 
 static qreal s_frameRadius = 30.0;
 static qreal s_dockRadius = 14.0;
+static qreal s_mergeGap = 0.0;
+static bool s_mergeDebug = false;
 static bool s_forceMenu = true;
 static bool s_forceTooltip = false;
 static bool s_forcePlasmaPopup = true;
@@ -327,11 +330,17 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
         qCWarning(KWIN_LIQUIDGLASS) << "force glass: menu" << s_forceMenu << "tooltip" << s_forceTooltip << "plasmapopup" << s_forcePlasmaPopup;
     }
     {
+        s_mergeGap = 0.0;
+        s_mergeDebug = false;
         QFile roundFile(QDir::homePath() + QStringLiteral("/.config/liquidglass/round.conf"));
         if (roundFile.open(QIODevice::ReadOnly)) {
             const QStringList rows = QString::fromUtf8(roundFile.readAll()).split(QChar(10), Qt::SkipEmptyParts);
             for (const QString &row : rows) {
                 const QStringList rw = row.simplified().split(QChar(32), Qt::SkipEmptyParts);
+                if (rw.size() >= 2 && rw[0] == QStringLiteral("merge")) {
+                    s_mergeGap = qBound(0.0, rw[1].toDouble(), 200.0);
+                    s_mergeDebug = rw.size() >= 3 && rw[2] == QStringLiteral("1");
+                }
                 if (rw.size() >= 2 && rw[0] == QStringLiteral("dock")) {
                     s_dockRadius = qBound(0.0, rw[1].toDouble(), 100.0);
                 }
@@ -340,7 +349,7 @@ void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
                 }
             }
         }
-        qCWarning(KWIN_LIQUIDGLASS) << "menu radius setting:" << s_menuRadius << "dock" << s_dockRadius;
+        qCWarning(KWIN_LIQUIDGLASS) << "menu radius setting:" << s_menuRadius << "dock" << s_dockRadius << "merge" << s_mergeGap << s_mergeDebug;
     }
     if (m_valid) {
         const auto policyWindows = effects->stackingOrder();
@@ -562,6 +571,140 @@ bool LiquidGlassEffect::eventFilter(QObject *watched, QEvent *event)
     return false;
 }
 
+void LiquidGlassEffect::computeNecks()
+{
+    m_prevNecks.clear();
+    for (const Neck &old : m_necks) {
+        m_prevNecks.push_back(old.rect);
+    }
+    m_necks.clear();
+    if (s_mergeGap <= 0.0) {
+        return;
+    }
+    struct Cand
+    {
+        EffectWindow *w;
+        RectF box;
+    };
+    std::vector<Cand> cands;
+    bool hasTip = false;
+    for (EffectWindow *cw : effects->stackingOrder()) {
+        if (!cw || cw->isDeleted() || cw->isHidden() || cw->isMinimized() || !cw->isVisible() || cw->opacity() < 0.2) {
+            continue;
+        }
+        if (m_windows.find(cw) == m_windows.end() || cw->hasDecoration() || cw->isDesktop()) {
+            continue;
+        }
+        if (!(cw->isDock() || cw->isTooltip() || glassKindOf(cw) == 1.0f)) {
+            continue;
+        }
+        const RectF br = blurRegion(cw).boundingRect();
+        if (br.width() < 8.0 || br.height() < 8.0) {
+            continue;
+        }
+        RectF box(br.x() + cw->pos().x(), br.y() + cw->pos().y(), br.width(), br.height());
+        if (cw->data(5101).isValid()) {
+            const QRectF dr = cw->data(5101).toRectF();
+            box = RectF(dr.x(), dr.y(), dr.width(), dr.height());
+        }
+        cands.push_back({cw, box});
+        hasTip = hasTip || cw->isTooltip();
+    }
+    static auto lastCandLog = std::chrono::steady_clock::time_point();
+    static int candLogs = 0;
+    const auto nowT = std::chrono::steady_clock::now();
+    if (hasTip && candLogs < 24 && std::chrono::duration<double, std::milli>(nowT - lastCandLog).count() > 400.0) {
+        lastCandLog = nowT;
+        candLogs++;
+        for (const Cand &c : cands) {
+            const char *kc = c.w->isDock() ? "dock" : (c.w->isTooltip() ? "tooltip" : "popup");
+            qCWarning(KWIN_LIQUIDGLASS) << "merge: cand" << kc << c.box.x() << c.box.y() << c.box.width() << c.box.height() << "bottom" << c.box.bottom() << "opacity" << c.w->opacity();
+        }
+    }
+    const double contact = 3.0;
+    const double minOv = 8.0;
+    for (size_t i = 0; i < cands.size(); ++i) {
+        for (size_t j = i + 1; j < cands.size(); ++j) {
+            const RectF &a = cands[i].box;
+            const RectF &b = cands[j].box;
+            bool found = false;
+            double gap = 0.0;
+            RectF neck;
+            const double ovY0 = std::max(a.top(), b.top());
+            const double ovY1 = std::min(a.bottom(), b.bottom());
+            const double ovX0 = std::max(a.left(), b.left());
+            const double ovX1 = std::min(a.right(), b.right());
+            if (ovY1 - ovY0 >= minOv) {
+                const bool aLeft = (b.left() - a.right()) >= (a.left() - b.right());
+                const double x0 = aLeft ? a.right() : b.right();
+                const double x1 = aLeft ? b.left() : a.left();
+                gap = x1 - x0;
+                if (gap > -contact && gap <= s_mergeGap) {
+                    const double w2 = std::max(gap, 2.0);
+                    neck = RectF((x0 + x1) * 0.5 - w2 * 0.5, ovY0, w2, ovY1 - ovY0);
+                    found = true;
+                }
+            }
+            if (!found && ovX1 - ovX0 >= minOv) {
+                const bool aTop = (b.top() - a.bottom()) >= (a.top() - b.bottom());
+                const double y0 = aTop ? a.bottom() : b.bottom();
+                const double y1 = aTop ? b.top() : a.top();
+                gap = y1 - y0;
+                if (gap > -contact && gap <= s_mergeGap) {
+                    const double h2 = std::max(gap, 2.0);
+                    neck = RectF(ovX0, (y0 + y1) * 0.5 - h2 * 0.5, ovX1 - ovX0, h2);
+                    found = true;
+                }
+            }
+            if (found) {
+                m_necks.push_back(Neck{neck, gap, cands[i].w, cands[j].w});
+            }
+        }
+    }
+    static size_t lastCount = 0;
+    static int mergeLogs = 0;
+    if (m_necks.size() != lastCount && mergeLogs++ < 80) {
+        lastCount = m_necks.size();
+        if (m_necks.empty()) {
+            qCWarning(KWIN_LIQUIDGLASS) << "merge: neck gone";
+        }
+        for (const Neck &n : m_necks) {
+            const char *ka = !n.a ? "?" : (n.a->isDock() ? "dock" : (n.a->isTooltip() ? "tooltip" : "popup"));
+            const char *kb = !n.b ? "?" : (n.b->isDock() ? "dock" : (n.b->isTooltip() ? "tooltip" : "popup"));
+            qCWarning(KWIN_LIQUIDGLASS) << "merge: neck gap" << n.gap << "rect" << n.rect.x() << n.rect.y() << n.rect.width() << n.rect.height() << ka << kb;
+        }
+    }
+}
+
+bool LiquidGlassEffect::paintScreen(const RenderTarget &renderTarget, const RenderViewport &viewport, int mask, const Region &deviceRegion, LogicalOutput *screen)
+{
+    if (!effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen)) {
+        return false;
+    }
+    if (!s_mergeDebug || m_necks.empty()) {
+        return true;
+    }
+    const double sc = viewport.scale();
+    QList<QVector2D> verts;
+    for (const Neck &n : m_necks) {
+        const RectF r = n.rect.scaled(sc);
+        verts.push_back(QVector2D(r.left(), r.top()));
+        verts.push_back(QVector2D(r.right(), r.top()));
+        verts.push_back(QVector2D(r.right(), r.bottom()));
+        verts.push_back(QVector2D(r.right(), r.bottom()));
+        verts.push_back(QVector2D(r.left(), r.bottom()));
+        verts.push_back(QVector2D(r.left(), r.top()));
+    }
+    GLVertexBuffer *vbo = GLVertexBuffer::streamingBuffer();
+    vbo->reset();
+    vbo->setVertices(verts);
+    ShaderBinder binder(ShaderTrait::UniformColor);
+    binder.shader()->setUniform(GLShader::Mat4Uniform::ModelViewProjectionMatrix, viewport.projectionMatrix());
+    binder.shader()->setUniform(GLShader::ColorUniform::Color, QColor(0, 255, 0));
+    vbo->render(GL_TRIANGLES);
+    return true;
+}
+
 bool LiquidGlassEffect::enabledByDefault()
 {
     const auto context = effects->openglContext();
@@ -637,6 +780,15 @@ void LiquidGlassEffect::prePaintScreen(ScreenPrePaintData &data)
     m_currentView = data.view;
 
     effects->prePaintScreen(data);
+    if (s_mergeGap > 0.0 || !m_necks.empty()) {
+        computeNecks();
+        for (const RectF &pn : m_prevNecks) {
+            data.paint += RectF(pn.x() - 2.0, pn.y() - 2.0, pn.width() + 4.0, pn.height() + 4.0).rounded();
+        }
+        for (const Neck &cn : m_necks) {
+            data.paint += RectF(cn.rect.x() - 2.0, cn.rect.y() - 2.0, cn.rect.width() + 4.0, cn.rect.height() + 4.0).rounded();
+        }
+    }
 }
 
 bool LiquidGlassEffect::shouldBlur(const EffectWindow *w, int mask, const WindowPaintData &data) const

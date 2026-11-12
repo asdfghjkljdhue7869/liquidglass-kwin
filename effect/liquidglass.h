@@ -69,6 +69,7 @@ public:
         return 20;
     }
 
+    bool paintScreen(const RenderTarget &renderTarget, const RenderViewport &viewport, int mask, const Region &deviceRegion, LogicalOutput *screen) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
     bool blocksDirectScanout() const override;
@@ -174,6 +175,16 @@ private:
 
     QMap<EffectWindow *, QMetaObject::Connection> windowBlurChangedConnections;
     std::unordered_map<EffectWindow *, LiquidGlassEffectData> m_windows;
+    struct Neck
+    {
+        RectF rect;
+        double gap = 0.0;
+        EffectWindow *a = nullptr;
+        EffectWindow *b = nullptr;
+    };
+    std::vector<Neck> m_necks;
+    std::vector<RectF> m_prevNecks;
+    void computeNecks();
 };
 
 inline bool LiquidGlassEffect::provides(Effect::Feature feature)

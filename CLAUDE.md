@@ -191,3 +191,20 @@ Status when this log was written: the global rounding plugins were installed on 
 ### Not verified
 - After the final row was loaded the 25 s test captured no drop start line, so the hasStart false case rests on the user eyes only.
 - The user accepts waiting the full 340 ms when switching submenus quickly; a QUICKMS value between 110 and 340 without the morph was not tried.
+
+## Session log 2026-11-11 (tooltip droplet, glass merge stage 1)
+
+### Verified (log line, screenshot or the user by eye)
+- Tooltips run the popup droplet (isTooltip joined the popup list in the round effect); drop start lines show ms 340 and cursor anchors near y 1020 to 1040.
+- Merge stage 1 lives in the glass plugin and is off unless round.conf has the row merge MAXGAP DEBUG (merge 0 0 is off). computeNecks pairs glass boxes of docks, tooltips and popups (no decorated windows) whose facing edges overlap by 8 px or more and whose gap is between -3 and MAXGAP px. With DEBUG 1, paintScreen draws a flat green strip in each gap (UniformColor shader and the streaming vbo, same pattern as the magnifier plugin) and prePaintScreen adds the current and previous strips to data.paint so they repaint and clean up. Log lines: merge: neck gap, merge: neck gone, merge: cand (first 24, only while a tooltip is a candidate).
+- Screenshot proof: a green strip 366 px wide and 4 px high sits exactly between the top panel rim and the File menu rim.
+- Popups open flush against their parent: gaps of about 0 to 1.2 px for panel menus, -2.8 to 0 px for submenus abutting menus, and real gaps of 36 to 67 px between the panel and some popups.
+- Tooltip windows (class org.kde.plasmashell, tooltip true) end at y 1001; the dock frame is 87 px tall with its glass 8 px inside.
+
+### Not verified
+- No dock plus tooltip pair has been logged yet.
+- Stage 2 is not written. Design: a dedicated neck shader (embedded with generateCustomShader and the RoundedCorners trait, not a resource file) that samples the blurred textures of both windows (clamped at the facing edge, blended across the gap), a smooth union of the two rounded boxes for the waist and fillets, and rim light along the merged outline. It needs each window background rect stored in LiquidGlassRenderData when blur() runs, and it must not repaint over window content.
+- Whether the neck survives damage-limited repaints, and its cost on the iGPU.
+
+### User preferences for the next session
+- Never .sh files; only heredoc blocks pasted in chat, each at most about 100 lines (a 200 line block was cut off when pasted). Split long patches into several blocks.
