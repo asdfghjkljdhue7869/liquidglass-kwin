@@ -175,16 +175,28 @@ private:
 
     QMap<EffectWindow *, QMetaObject::Connection> windowBlurChangedConnections;
     std::unordered_map<EffectWindow *, LiquidGlassEffectData> m_windows;
+    struct NeckShape
+    {
+        double x = 0.0;
+        double y = 0.0;
+        double w = 0.0;
+        double h = 0.0;
+        float r[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    };
     struct Neck
     {
         RectF rect;
         double gap = 0.0;
         EffectWindow *a = nullptr;
         EffectWindow *b = nullptr;
+        NeckShape sa;
+        NeckShape sb;
     };
     std::vector<Neck> m_necks;
     std::vector<RectF> m_prevNecks;
+    std::unique_ptr<GLShader> m_neckShader;
     void computeNecks();
+    void drawNecks(const RenderViewport &viewport, EffectWindow *w, LiquidGlassRenderData &ri, const RectF &bg, float modulation);
 };
 
 inline bool LiquidGlassEffect::provides(Effect::Feature feature)
