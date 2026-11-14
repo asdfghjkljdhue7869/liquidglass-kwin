@@ -1032,6 +1032,7 @@ void LiquidGlassEffect::paintNecks(const RenderTarget &renderTarget, const Rende
                 const NeckShape &oth = side == 0 ? n.sb : n.sa;
                 EffectWindow *ow = side == 0 ? n.a : n.b;
                 EffectWindow *nw = side == 0 ? n.b : n.a;
+                { const int bgLoc = ws->uniformLocation("bgSize"); if (bgLoc >= 0) { ws->setUniform(bgLoc, QVector2D(0.0f, 0.0f)); } }
                 ws->setUniform(m_roundedOnscreenPass.boxLocation, boxW(own));
                 ws->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, radW(own));
                 ws->setUniform(m_roundedOnscreenPass.kindLocation, ow->isDock() ? 2.0f : 1.0f);
@@ -1236,7 +1237,7 @@ bool LiquidGlassEffect::shouldBlur(const EffectWindow *w, int mask, const Window
     bool scaled = !qFuzzyCompare(data.xScale(), 1.0) && !qFuzzyCompare(data.yScale(), 1.0);
     bool translated = data.xTranslation() || data.yTranslation();
 
-    if ((scaled || (translated || (mask & PAINT_WINDOW_TRANSFORMED))) && !w->data(WindowForceBlurRole).toBool()) {
+    if ((scaled || translated) && !w->data(WindowForceBlurRole).toBool()) {
         return false;
     }
 
@@ -1569,6 +1570,7 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.mvpMatrixLocation, projectionMatrix);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.colorMatrixLocation, m_colorMatrix);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.halfpixelLocation, halfpixel);
+        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.shader->uniformLocation("bgSize"), QVector2D(float(scaledBackgroundRect.width()), float(scaledBackgroundRect.height())));
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.offsetLocation, float(m_offset));
         QVector4D boxUniform(nativeBox.horizontalCenter(), nativeBox.verticalCenter(), nativeBox.width() * 0.5, nativeBox.height() * 0.5);
         QVector4D radiusUniform = nativeCornerRadius.toVector();
