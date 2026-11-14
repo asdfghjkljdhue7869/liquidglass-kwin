@@ -7,6 +7,8 @@
 */
 
 #include "liquidglass.h"
+#include <QDir>
+#include <QFile>
 // KConfigSkeleton
 #include "liquidglassconfig.h"
 
@@ -279,6 +281,8 @@ static qreal s_menuRadius = 18.0;
 
 void LiquidGlassEffect::reconfigure(ReconfigureFlags flags)
 {
+    m_neckShader.reset();
+    m_neckFailed = false;
     LiquidGlassConfig::self()->read();
 
     const QString overrideFrag = QDir::homePath() + QStringLiteral("/.config/liquidglass/onscreen_rounded.frag");
@@ -602,7 +606,7 @@ void LiquidGlassEffect::computeNecks()
             continue;
         }
         const RectF br = blurRegion(cw).boundingRect();
-        if (br.width() < 8.0 || br.height() < 8.0) {
+        if (br.width() < 20.0 || br.height() < 20.0) {
             continue;
         }
         RectF box(br.x() + cw->pos().x(), br.y() + cw->pos().y(), br.width(), br.height());
@@ -724,18 +728,23 @@ static const char s_neckFrag[] = R"GLSL(#version 140
 
 uniform sampler2D texUnit;
 uniform sampler2D sharpTex;
-uniform vec4 boxO;
-uniform vec4 radO;
-uniform vec4 boxP;
-uniform vec4 radP;
+uniform vec4 boxA;
+uniform vec4 radA;
+uniform vec4 boxB;
+uniform vec4 radB;
 uniform float kBlend;
-uniform float dBand;
+uniform float dimA;
+uniform float dimB;
 uniform float opacity;
 
 in vec2 uv;
 in vec2 vertex;
 
 out vec4 fragColor;
+
+const float N_FROST = 0.62;
+const float N_TINT = 0.12;
+const float N_WASH = 0.02;
 
 float smoothMin(float a, float b, float k)
 {
@@ -745,27 +754,37 @@ float smoothMin(float a, float b, float k)
 
 float unionSdf(vec2 p)
 {
-    return smoothMin(sdfRoundedBox(p, boxO.xy, boxO.zw, radO), sdfRoundedBox(p, boxP.xy, boxP.zw, radP), kBlend);
+    float u = smoothMin(sdfRoundedBox(p, boxA.xy, boxA.zw, radA), sdfRoundedBox(p, boxB.xy, boxB.zw, radB), kBlend);
+    vec2 lo = min(boxA.xy - boxA.zw, boxB.xy - boxB.zw);
+    vec2 hi = max(boxA.xy + boxA.zw, boxB.xy + boxB.zw);
+    float fbb = sdfRoundedBox(p, 0.5 * (lo + hi), 0.5 * (hi - lo), vec4(0.0));
+    return -smoothMin(-u, -fbb, 6.0);
 }
 
 void main(void)
 {
-    float fo = sdfRoundedBox(vertex, boxO.xy, boxO.zw, radO);
-    float fp = sdfRoundedBox(vertex, boxP.xy, boxP.zw, radP);
-    float fu = smoothMin(fo, fp, kBlend);
+    float fa = sdfRoundedBox(vertex, boxA.xy, boxA.zw, radA);
+    float fb = sdfRoundedBox(vertex, boxB.xy, boxB.zw, radB);
+    float fu = unionSdf(vertex);
     float inUnion = 1.0 - clamp(0.5 + fu / max(fwidth(fu), 0.001), 0.0, 1.0);
-    float inside = smoothstep(0.0, -1.0, min(fo, fp));
-    float bulge = min(fo, fp) - fu;
-    float cover = max(1.0 - smoothstep(0.35 * dBand, dBand, max(fo, fp)), smoothstep(0.2, 2.0, bulge));
-    float joint = mix(1.0, cover, inside);
-    float mine = 1.0 - smoothstep(-1.0, 1.0, fo - fp);
-    float a = inUnion * joint * mine;
+    float a = inUnion * smoothstep(-0.5, 0.5, fa) * smoothstep(-0.5, 0.5, fb);
     if (a <= 0.0) {
         discard;
     }
+    float xf = smoothstep(-0.5 * kBlend, 0.5 * kBlend, fa - fb);
     vec3 soft = textureLod(texUnit, uv, 0.0).rgb;
     vec3 sharp = textureLod(sharpTex, uv, 0.0).rgb;
-    vec3 col = mix(sharp, soft, 0.70);
+    vec3 col = mix(sharp, soft, N_FROST);
+    col *= 1.0 - mix(dimA, dimB, xf);
+    float k = pow(1.0 - clamp(-fu / 40.0, 0.0, 1.0), 1.6);
+    vec4 bx = xf > 0.5 ? boxB : boxA;
+    vec2 q = (vertex - bx.xy) / max(bx.zw, vec2(1.0));
+    vec3 wash = vec3(1.00, 0.30, 0.70) * exp(-dot(q - vec2(-0.6, -0.5), q - vec2(-0.6, -0.5)) / 0.8);
+    wash += vec3(0.20, 0.90, 1.00) * exp(-dot(q - vec2(0.7, -0.2), q - vec2(0.7, -0.2)) / 0.8);
+    wash += vec3(0.60, 0.35, 1.00) * exp(-dot(q - vec2(0.1, 0.8), q - vec2(0.1, 0.8)) / 0.8);
+    vec3 rimCol = mix(col, soft, 0.6) + wash * N_TINT;
+    col = mix(col, rimCol, 0.70 * k);
+    col += wash * N_WASH;
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(vec3(lum), col, 1.30);
     vec2 g = vec2(unionSdf(vertex + vec2(1.0, 0.0)) - unionSdf(vertex - vec2(1.0, 0.0)),
@@ -780,114 +799,307 @@ void main(void)
 }
 )GLSL";
 
-void LiquidGlassEffect::drawNecks(const RenderViewport &viewport, EffectWindow *w, LiquidGlassRenderData &ri, const RectF &bg, float modulation)
+void LiquidGlassEffect::captureNeckBackdrops(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, const Region &deviceRegion)
 {
-    static bool shaderFailed = false;
-    if (shaderFailed || ri.framebuffers.size() < 2) {
+    Q_UNUSED(deviceRegion)
+    const double pad = s_mergeK + 36.0;
+    for (const Neck &n : m_necks) {
+        if (n.a != w) {
+            continue;
+        }
+        const RectF want = RectF(n.rect.x() - pad, n.rect.y() - pad, n.rect.width() + 2.0 * pad, n.rect.height() + 2.0 * pad).intersected(viewport.renderRect());
+        const Rect region = want.rounded();
+        if (region.width() < 32 || region.height() < 32) {
+            continue;
+        }
+        NeckBackdrop *nb = nullptr;
+        for (NeckBackdrop &c : m_neckBackdrops) {
+            if (c.a == n.a && c.b == n.b) {
+                nb = &c;
+            }
+        }
+        if (!nb) {
+            m_neckBackdrops.emplace_back();
+            nb = &m_neckBackdrops.back();
+            nb->a = n.a;
+            nb->b = n.b;
+        }
+        GLenum textureFormat = GL_RGBA8;
+        if (renderTarget.texture()) {
+            textureFormat = renderTarget.texture()->internalFormat();
+        }
+        if (nb->fbs.size() != m_iterationCount + 1 || nb->textures[0]->size() != region.size() || nb->textures[0]->internalFormat() != textureFormat) {
+            nb->fbs.clear();
+            nb->textures.clear();
+            for (size_t i = 0; i <= m_iterationCount; ++i) {
+                auto texture = GLTexture::allocate(textureFormat, region.size() / (1 << i));
+                if (!texture) {
+                    nb->fbs.clear();
+                    nb->textures.clear();
+                    return;
+                }
+                texture->setFilter(GL_LINEAR);
+                texture->setWrapMode(GL_CLAMP_TO_EDGE);
+                auto framebuffer = std::make_unique<GLFramebuffer>(texture.get());
+                if (!framebuffer->valid()) {
+                    nb->fbs.clear();
+                    nb->textures.clear();
+                    return;
+                }
+                nb->textures.push_back(std::move(texture));
+                nb->fbs.push_back(std::move(framebuffer));
+            }
+        }
+        nb->region = region;
+        nb->stamp = m_neckFrame;
+        nb->fbs[0]->blitFromRenderTarget(renderTarget, viewport, region, region.translated(-region.topLeft()));
+
+        GLVertexBuffer *vbo = GLVertexBuffer::streamingBuffer();
+        vbo->reset();
+        vbo->setAttribLayout(std::span(GLVertexBuffer::GLVertex2DLayout), sizeof(GLVertex2D));
+        auto result = vbo->map<GLVertex2D>(6);
+        if (!result) {
+            continue;
+        }
+        auto map = *result;
+        size_t vi = 0;
+        const float rw = float(region.width());
+        const float rh = float(region.height());
+        auto put = [&](float x, float y) {
+            map[vi++] = GLVertex2D{
+                .position = QVector2D(x, y),
+                .texcoord = QVector2D(x / rw, 1.0f - y / rh),
+            };
+        };
+        put(0, 0);
+        put(rw, rh);
+        put(0, rh);
+        put(0, 0);
+        put(rw, 0);
+        put(rw, rh);
+        vbo->unmap();
+        vbo->bindArrays();
+
+        QMatrix4x4 projectionMatrix;
+        projectionMatrix.ortho(QRectF(0.0, 0.0, region.width(), region.height()));
+        ShaderManager::instance()->pushShader(m_downsamplePass.shader.get());
+        m_downsamplePass.shader->setUniform(m_downsamplePass.mvpMatrixLocation, projectionMatrix);
+        m_downsamplePass.shader->setUniform(m_downsamplePass.offsetLocation, float(m_offset));
+        for (size_t i = 1; i < nb->fbs.size(); ++i) {
+            const auto &read = nb->fbs[i - 1];
+            const auto &draw = nb->fbs[i];
+            const QVector2D halfpixel(0.5 / read->colorAttachment()->width(), 0.5 / read->colorAttachment()->height());
+            m_downsamplePass.shader->setUniform(m_downsamplePass.halfpixelLocation, halfpixel);
+            read->colorAttachment()->bind();
+            GLFramebuffer::pushFramebuffer(draw.get());
+            vbo->draw(GL_TRIANGLES, 0, 6);
+        }
+        ShaderManager::instance()->popShader();
+
+        ShaderManager::instance()->pushShader(m_upsamplePass.shader.get());
+        m_upsamplePass.shader->setUniform(m_upsamplePass.mvpMatrixLocation, projectionMatrix);
+        m_upsamplePass.shader->setUniform(m_upsamplePass.offsetLocation, float(m_offset));
+        for (size_t i = nb->fbs.size() - 1; i > 1; --i) {
+            GLFramebuffer::popFramebuffer();
+            const auto &read = nb->fbs[i];
+            const QVector2D halfpixel(0.5 / read->colorAttachment()->width(), 0.5 / read->colorAttachment()->height());
+            m_upsamplePass.shader->setUniform(m_upsamplePass.halfpixelLocation, halfpixel);
+            read->colorAttachment()->bind();
+            vbo->draw(GL_TRIANGLES, 0, 6);
+        }
+        ShaderManager::instance()->popShader();
+        GLFramebuffer::popFramebuffer();
+        vbo->unbindArrays();
+    }
+}
+
+void LiquidGlassEffect::paintNecks(const RenderTarget &renderTarget, const RenderViewport &viewport, const Region &deviceRegion)
+{
+    Q_UNUSED(renderTarget)
+    if (m_neckFailed) {
         return;
     }
     if (!m_neckShader) {
-        m_neckShader = ShaderManager::instance()->generateCustomShader(ShaderTrait::MapTexture, QByteArray(s_neckVert), QByteArray(s_neckFrag));
+        QByteArray fragSrc(s_neckFrag);
+        QFile nf(QDir::homePath() + QStringLiteral("/.config/liquidglass/neck.frag"));
+        const bool fromFile = nf.exists() && nf.open(QIODevice::ReadOnly);
+        if (fromFile) {
+            fragSrc = nf.readAll();
+        }
+        m_neckShader = ShaderManager::instance()->generateCustomShader(ShaderTrait::MapTexture, QByteArray(s_neckVert), fragSrc);
         if (!m_neckShader) {
-            shaderFailed = true;
-            qCWarning(KWIN_LIQUIDGLASS) << "merge: neck shader failed to build";
+            m_neckFailed = true;
+            qCWarning(KWIN_LIQUIDGLASS) << "merge: neck shader failed to build, file" << fromFile;
             return;
         }
-        qCWarning(KWIN_LIQUIDGLASS) << "merge: neck shader built";
-    }
-    std::vector<const Neck *> mine;
-    for (const Neck &n : m_necks) {
-        if (n.a == w || n.b == w) {
-            mine.push_back(&n);
-        }
-    }
-    if (mine.empty()) {
-        return;
+        qCWarning(KWIN_LIQUIDGLASS) << "merge: neck shader built, file" << fromFile;
     }
     const double sc = viewport.scale();
-    GLVertexBuffer *vbo = GLVertexBuffer::streamingBuffer();
-    vbo->reset();
-    vbo->setAttribLayout(std::span(GLVertexBuffer::GLVertex2DLayout), sizeof(GLVertex2D));
-    auto result = vbo->map<GLVertex2D>(mine.size() * 6);
-    if (!result) {
-        return;
-    }
-    auto map = *result;
-    size_t vi = 0;
-    auto put = [&](double x, double y) {
-        map[vi++] = GLVertex2D{
-            .position = QVector2D(float(x), float(y)),
-            .texcoord = QVector2D(float(x / bg.width()), float(1.0 - y / bg.height())),
-        };
-    };
-    for (const Neck *n : mine) {
-        const double x0 = (n->rect.left() - s_mergeK) * sc - bg.x();
-        const double y0 = (n->rect.top() - s_mergeK) * sc - bg.y();
-        const double x1 = (n->rect.right() + s_mergeK) * sc - bg.x();
-        const double y1 = (n->rect.bottom() + s_mergeK) * sc - bg.y();
-        put(x0, y0);
-        put(x1, y1);
-        put(x0, y1);
-        put(x0, y0);
-        put(x1, y0);
-        put(x1, y1);
-    }
-    vbo->unmap();
-    vbo->bindArrays();
-
     GLShader *sh = m_neckShader.get();
-    ShaderManager::instance()->pushShader(sh);
-    QMatrix4x4 proj = viewport.projectionMatrix();
-    proj.translate(float(bg.x()), float(bg.y()));
-    sh->setUniform(sh->uniformLocation("modelViewProjectionMatrix"), proj);
-    sh->setUniform(sh->uniformLocation("texUnit"), 0);
-    sh->setUniform(sh->uniformLocation("sharpTex"), 1);
-    sh->setUniform(sh->uniformLocation("kBlend"), float(s_mergeK * sc));
-    sh->setUniform(sh->uniformLocation("dBand"), float(20.0 * sc));
-    sh->setUniform(sh->uniformLocation("opacity"), modulation);
-    const int locBoxO = sh->uniformLocation("boxO");
-    const int locRadO = sh->uniformLocation("radO");
-    const int locBoxP = sh->uniformLocation("boxP");
-    const int locRadP = sh->uniformLocation("radP");
+    for (const Neck &n : m_necks) {
+        const NeckBackdrop *nb = nullptr;
+        for (const NeckBackdrop &c : m_neckBackdrops) {
+            if (c.a == n.a && c.b == n.b && c.fbs.size() > 1) {
+                nb = &c;
+            }
+        }
+        if (!nb) {
+            continue;
+        }
+        const Rect backgroundRect = nb->region;
+        const Rect scaledBg = backgroundRect.scaled(sc).rounded();
+        const Rect deviceBg = viewport.mapToDeviceCoordinates(backgroundRect).rounded();
+        const RectF shape = RectF(n.rect.x() - s_mergeK, n.rect.y() - s_mergeK, n.rect.width() + 2.0 * s_mergeK, n.rect.height() + 2.0 * s_mergeK).translated(-backgroundRect.topLeft()).scaled(sc).rounded();
+        QList<RectF> eff;
+        if (deviceRegion != Region::infinite()) {
+            for (const Rect &clipRect : deviceRegion.rects()) {
+                const RectF deviceClipRect = clipRect.translated(-deviceBg.topLeft());
+                const RectF isect = deviceClipRect.intersected(shape);
+                if (!isect.isEmpty()) {
+                    eff.append(isect);
+                }
+            }
+        } else {
+            eff.append(shape);
+        }
+        if (eff.isEmpty()) {
+            continue;
+        }
+        GLVertexBuffer *vbo = GLVertexBuffer::streamingBuffer();
+        vbo->reset();
+        vbo->setAttribLayout(std::span(GLVertexBuffer::GLVertex2DLayout), sizeof(GLVertex2D));
+        auto result = vbo->map<GLVertex2D>(eff.size() * 6);
+        if (!result) {
+            continue;
+        }
+        auto map = *result;
+        size_t vi = 0;
+        const double bw = scaledBg.width();
+        const double bh = scaledBg.height();
+        auto put = [&](double x, double y) {
+            map[vi++] = GLVertex2D{
+                .position = QVector2D(float(x), float(y)),
+                .texcoord = QVector2D(float(x / bw), float(1.0 - y / bh)),
+            };
+        };
+        for (const RectF &r : eff) {
+            put(r.left(), r.top());
+            put(r.right(), r.bottom());
+            put(r.left(), r.bottom());
+            put(r.left(), r.top());
+            put(r.right(), r.top());
+            put(r.right(), r.bottom());
+        }
+        vbo->unmap();
+        vbo->bindArrays();
 
-    ri.framebuffers[1]->colorAttachment()->bind();
-    glActiveTexture(GL_TEXTURE1);
-    ri.framebuffers[0]->colorAttachment()->bind();
-    glActiveTexture(GL_TEXTURE0);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-    auto boxU = [&](const NeckShape &s) {
-        const double lx = s.x * sc - bg.x();
-        const double ly = s.y * sc - bg.y();
-        return QVector4D(float(lx + s.w * sc * 0.5), float(ly + s.h * sc * 0.5), float(s.w * sc * 0.5), float(s.h * sc * 0.5));
-    };
-    auto radU = [&](const NeckShape &s) {
-        return QVector4D(float(s.r[0] * sc), float(s.r[1] * sc), float(s.r[2] * sc), float(s.r[3] * sc));
-    };
-    for (size_t i = 0; i < mine.size(); ++i) {
-        const Neck *n = mine[i];
-        const NeckShape &own = n->a == w ? n->sa : n->sb;
-        const NeckShape &oth = n->a == w ? n->sb : n->sa;
-        sh->setUniform(locBoxO, boxU(own));
-        sh->setUniform(locRadO, radU(own));
-        sh->setUniform(locBoxP, boxU(oth));
-        sh->setUniform(locRadP, radU(oth));
-        vbo->draw(GL_TRIANGLES, i * 6, 6);
+        const bool useWin = m_unionAware && m_roundedOnscreenPass.shader && m_roundedOnscreenPass.shader->uniformLocation("bridgeMode") >= 0;
+        if (useWin) {
+            GLShader *ws = m_roundedOnscreenPass.shader.get();
+            ShaderManager::instance()->pushShader(ws);
+            QMatrix4x4 projW = viewport.projectionMatrix();
+            projW.translate(float(scaledBg.x()), float(scaledBg.y()));
+            const QVector2D hp(0.5f / nb->fbs[1]->colorAttachment()->width(), 0.5f / nb->fbs[1]->colorAttachment()->height());
+            const float opW = float(std::min(n.a->opacity(), n.b->opacity()));
+            ws->setUniform(m_roundedOnscreenPass.mvpMatrixLocation, projW);
+            ws->setUniform(m_roundedOnscreenPass.colorMatrixLocation, m_colorMatrix);
+            ws->setUniform(m_roundedOnscreenPass.halfpixelLocation, hp);
+            ws->setUniform(m_roundedOnscreenPass.offsetLocation, float(m_offset));
+            ws->setUniform(m_roundedOnscreenPass.sharpLocation, 1);
+            ws->setUniform(m_roundedOnscreenPass.opacityLocation, opW * opW);
+            const int lCnt = ws->uniformLocation("nbrCount");
+            const int lK = ws->uniformLocation("nbrK");
+            const int lB0 = ws->uniformLocation("nbrBox0");
+            const int lR0 = ws->uniformLocation("nbrRad0");
+            const int lKind = ws->uniformLocation("nbrKind0");
+            const int lBr = ws->uniformLocation("bridgeMode");
+            auto boxW = [&](const NeckShape &s) {
+                const double lx = s.x * sc - scaledBg.x();
+                const double ly = s.y * sc - scaledBg.y();
+                return QVector4D(float(lx + s.w * sc * 0.5), float(ly + s.h * sc * 0.5), float(s.w * sc * 0.5), float(s.h * sc * 0.5));
+            };
+            auto radW = [&](const NeckShape &s) {
+                return QVector4D(float(s.r[0] * sc), float(s.r[1] * sc), float(s.r[2] * sc), float(s.r[3] * sc));
+            };
+            nb->fbs[1]->colorAttachment()->bind();
+            glActiveTexture(GL_TEXTURE1);
+            nb->fbs[0]->colorAttachment()->bind();
+            glActiveTexture(GL_TEXTURE0);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            for (int side = 0; side < 2; ++side) {
+                const NeckShape &own = side == 0 ? n.sa : n.sb;
+                const NeckShape &oth = side == 0 ? n.sb : n.sa;
+                EffectWindow *ow = side == 0 ? n.a : n.b;
+                EffectWindow *nw = side == 0 ? n.b : n.a;
+                ws->setUniform(m_roundedOnscreenPass.boxLocation, boxW(own));
+                ws->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, radW(own));
+                ws->setUniform(m_roundedOnscreenPass.kindLocation, ow->isDock() ? 2.0f : 1.0f);
+                ws->setUniform(lCnt, 1.0f);
+                ws->setUniform(lK, float(s_mergeK * sc));
+                ws->setUniform(lB0, boxW(oth));
+                ws->setUniform(lR0, radW(oth));
+                if (lKind >= 0) {
+                    ws->setUniform(lKind, nw->isDock() ? 2.0f : 1.0f);
+                }
+                ws->setUniform(lBr, 1.0f);
+                vbo->draw(GL_TRIANGLES, 0, eff.size() * 6);
+            }
+            ws->setUniform(lBr, 0.0f);
+            glDisable(GL_BLEND);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE0);
+            ShaderManager::instance()->popShader();
+        } else {
+        ShaderManager::instance()->pushShader(sh);
+        QMatrix4x4 proj = viewport.projectionMatrix();
+        proj.translate(float(scaledBg.x()), float(scaledBg.y()));
+        auto boxU = [&](const NeckShape &s) {
+            const double lx = s.x * sc - scaledBg.x();
+            const double ly = s.y * sc - scaledBg.y();
+            return QVector4D(float(lx + s.w * sc * 0.5), float(ly + s.h * sc * 0.5), float(s.w * sc * 0.5), float(s.h * sc * 0.5));
+        };
+        auto radU = [&](const NeckShape &s) {
+            return QVector4D(float(s.r[0] * sc), float(s.r[1] * sc), float(s.r[2] * sc), float(s.r[3] * sc));
+        };
+        const float op = float(std::min(n.a->opacity(), n.b->opacity()));
+        sh->setUniform(sh->uniformLocation("modelViewProjectionMatrix"), proj);
+        sh->setUniform(sh->uniformLocation("texUnit"), 0);
+        sh->setUniform(sh->uniformLocation("sharpTex"), 1);
+        sh->setUniform(sh->uniformLocation("boxA"), boxU(n.sa));
+        sh->setUniform(sh->uniformLocation("radA"), radU(n.sa));
+        sh->setUniform(sh->uniformLocation("boxB"), boxU(n.sb));
+        sh->setUniform(sh->uniformLocation("radB"), radU(n.sb));
+        sh->setUniform(sh->uniformLocation("kBlend"), float(s_mergeK * sc));
+        sh->setUniform(sh->uniformLocation("dimA"), n.a->isDock() ? 0.0f : 0.15f);
+        sh->setUniform(sh->uniformLocation("dimB"), n.b->isDock() ? 0.0f : 0.15f);
+        sh->setUniform(sh->uniformLocation("opacity"), op * op);
+        nb->fbs[1]->colorAttachment()->bind();
+        glActiveTexture(GL_TEXTURE1);
+        nb->fbs[0]->colorAttachment()->bind();
+        glActiveTexture(GL_TEXTURE0);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        vbo->draw(GL_TRIANGLES, 0, eff.size() * 6);
+        glDisable(GL_BLEND);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+        ShaderManager::instance()->popShader();
+        }
+        vbo->unbindArrays();
     }
-
-    glDisable(GL_BLEND);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glActiveTexture(GL_TEXTURE0);
-    ShaderManager::instance()->popShader();
-    vbo->unbindArrays();
 }
 
 bool LiquidGlassEffect::paintScreen(const RenderTarget &renderTarget, const RenderViewport &viewport, int mask, const Region &deviceRegion, LogicalOutput *screen)
 {
     if (!effects->paintScreen(renderTarget, viewport, mask, deviceRegion, screen)) {
         return false;
+    }
+    if (!m_necks.empty() && s_mergeGap > 0.0 && !s_mergeDebug) {
+        paintNecks(renderTarget, viewport, deviceRegion);
+        return true;
     }
     if (!s_mergeDebug || m_necks.empty()) {
         return true;
@@ -990,17 +1202,29 @@ void LiquidGlassEffect::prePaintScreen(ScreenPrePaintData &data)
     effects->prePaintScreen(data);
     if (s_mergeGap > 0.0 || !m_necks.empty()) {
         computeNecks();
+        ++m_neckFrame;
+        m_neckBackdrops.erase(std::remove_if(m_neckBackdrops.begin(), m_neckBackdrops.end(), [this](const NeckBackdrop &nb) {
+            for (const Neck &n : m_necks) {
+                if (n.a == nb.a && n.b == nb.b) {
+                    return false;
+                }
+            }
+            return true;
+        }), m_neckBackdrops.end());
         for (const RectF &pn : m_prevNecks) {
-            data.paint += RectF(pn.x() - s_mergeK - 2.0, pn.y() - s_mergeK - 2.0, pn.width() + 2.0 * s_mergeK + 4.0, pn.height() + 2.0 * s_mergeK + 4.0).rounded();
+            data.paint += RectF(pn.x() - s_mergeK - 38.0, pn.y() - s_mergeK - 38.0, pn.width() + 2.0 * s_mergeK + 76.0, pn.height() + 2.0 * s_mergeK + 76.0).rounded();
         }
         for (const Neck &cn : m_necks) {
-            data.paint += RectF(cn.rect.x() - s_mergeK - 2.0, cn.rect.y() - s_mergeK - 2.0, cn.rect.width() + 2.0 * s_mergeK + 4.0, cn.rect.height() + 2.0 * s_mergeK + 4.0).rounded();
+            data.paint += RectF(cn.rect.x() - s_mergeK - 38.0, cn.rect.y() - s_mergeK - 38.0, cn.rect.width() + 2.0 * s_mergeK + 76.0, cn.rect.height() + 2.0 * s_mergeK + 76.0).rounded();
         }
     }
 }
 
 bool LiquidGlassEffect::shouldBlur(const EffectWindow *w, int mask, const WindowPaintData &data) const
 {
+    if (!w->isDock() && !w->decoration() && std::min(w->frameGeometry().width(), w->frameGeometry().height()) < 20.0) {
+        return false;
+    }
     if (effects->activeFullScreenEffect() && !w->data(WindowForceBlurRole).toBool()) {
         return false;
     }
@@ -1070,6 +1294,9 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
         return;
     }
 
+    if (s_mergeGap > 0.0 && !s_mergeDebug && !m_necks.empty()) {
+        captureNeckBackdrops(renderTarget, viewport, w, deviceRegion);
+    }
     LiquidGlassEffectData &blurInfo = it->second;
     LiquidGlassRenderData &renderInfo = blurInfo.render[m_currentView];
     if (!shouldBlur(w, mask, data)) {
@@ -1380,6 +1607,51 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
             const QVector4D rv(float(qMax(0.0, qMin(double(dv.x()) * sc, cap2))), float(qMax(0.0, qMin(double(dv.y()) * sc, cap2))), float(qMax(0.0, qMin(double(dv.z()) * sc, cap2))), float(qMax(0.0, qMin(double(dv.w()) * sc, cap2))));
             radiusUniform = rv;
         }
+        {
+            GLShader *rs = m_roundedOnscreenPass.shader.get();
+            const int locCnt = rs->uniformLocation("nbrCount");
+            m_unionAware = locCnt >= 0;
+            if (m_unionAware) {
+                const double scN = viewport.scale();
+                int cnt = 0;
+                QVector4D nb[2];
+                QVector4D nr[2];
+                if (s_mergeGap > 0.0 && !s_mergeDebug) {
+                    for (const Neck &nk : m_necks) {
+                        if ((nk.a != w && nk.b != w) || cnt >= 2) {
+                            continue;
+                        }
+                        const NeckShape &o = nk.a == w ? nk.sb : nk.sa;
+                        const double lx = o.x * scN - scaledBackgroundRect.x();
+                        const double ly = o.y * scN - scaledBackgroundRect.y();
+                        nb[cnt] = QVector4D(float(lx + o.w * scN * 0.5), float(ly + o.h * scN * 0.5), float(o.w * scN * 0.5), float(o.h * scN * 0.5));
+                        nr[cnt] = QVector4D(float(o.r[0] * scN), float(o.r[1] * scN), float(o.r[2] * scN), float(o.r[3] * scN));
+                        ++cnt;
+                    }
+                }
+                rs->setUniform(locCnt, float(cnt));
+                const int locBr = rs->uniformLocation("bridgeMode");
+                if (locBr >= 0) {
+                    rs->setUniform(locBr, 0.0f);
+                }
+                const int locK = rs->uniformLocation("nbrK");
+                const int locB0 = rs->uniformLocation("nbrBox0");
+                const int locR0 = rs->uniformLocation("nbrRad0");
+                const int locB1 = rs->uniformLocation("nbrBox1");
+                const int locR1 = rs->uniformLocation("nbrRad1");
+                if (locK >= 0) {
+                    rs->setUniform(locK, float(s_mergeK * scN));
+                }
+                if (locB0 >= 0 && locR0 >= 0) {
+                    rs->setUniform(locB0, nb[0]);
+                    rs->setUniform(locR0, nr[0]);
+                }
+                if (locB1 >= 0 && locR1 >= 0) {
+                    rs->setUniform(locB1, nb[1]);
+                    rs->setUniform(locR1, nr[1]);
+                }
+            }
+        }
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.boxLocation, boxUniform);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, radiusUniform);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.opacityLocation, modulation);
@@ -1477,9 +1749,6 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
 
     vbo->unbindArrays();
 
-    if (s_mergeGap > 0.0 && !s_mergeDebug && !m_necks.empty()) {
-        drawNecks(viewport, w, renderInfo, RectF(scaledBackgroundRect.x(), scaledBackgroundRect.y(), scaledBackgroundRect.width(), scaledBackgroundRect.height()), modulation);
-    }
 }
 
 bool LiquidGlassEffect::isActive() const

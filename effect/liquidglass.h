@@ -194,9 +194,23 @@ private:
     };
     std::vector<Neck> m_necks;
     std::vector<RectF> m_prevNecks;
+    struct NeckBackdrop
+    {
+        EffectWindow *a = nullptr;
+        EffectWindow *b = nullptr;
+        Rect region;
+        quint64 stamp = 0;
+        std::vector<std::unique_ptr<GLTexture>> textures;
+        std::vector<std::unique_ptr<GLFramebuffer>> fbs;
+    };
+    std::vector<NeckBackdrop> m_neckBackdrops;
+    quint64 m_neckFrame = 0;
+    void captureNeckBackdrops(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, const Region &deviceRegion);
     std::unique_ptr<GLShader> m_neckShader;
+    bool m_unionAware = false;
+    bool m_neckFailed = false;
     void computeNecks();
-    void drawNecks(const RenderViewport &viewport, EffectWindow *w, LiquidGlassRenderData &ri, const RectF &bg, float modulation);
+    void paintNecks(const RenderTarget &renderTarget, const RenderViewport &viewport, const Region &deviceRegion);
 };
 
 inline bool LiquidGlassEffect::provides(Effect::Feature feature)

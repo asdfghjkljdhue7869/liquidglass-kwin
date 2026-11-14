@@ -208,3 +208,31 @@ Status when this log was written: the global rounding plugins were installed on 
 
 ### User preferences for the next session
 - Never .sh files; only heredoc blocks pasted in chat, each at most about 100 lines (a 200 line block was cut off when pasted). Split long patches into several blocks.
+
+## Session log 2026-11-12 to 2026-11-14 (merge stage 2, bridges)
+
+### Verified (log line, screenshot or pixel samples)
+- Dock plus tooltip pair detected (merge 120 1: neck gap 0, rect 731 1000 145 2). Row is now merge MAXGAP DEBUG K: DEBUG 1 draws only the green strip, 0 draws the real bridge, K is the smooth-union size in px (default 56, range 20 to 100).
+- computeNecks stores a NeckShape (box and four corner radii) for both windows; a is always the lower window in the stacking order. Windows smaller than 20 px (empty plasmashell popups such as the Search entry of the global menu, 12x12) are skipped by shouldBlur and by the neck candidates.
+- Window glass shader (override and install/onscreen_rounded.frag) is union aware: uniforms nbrCount nbrK nbrBox0 nbrRad0 nbrBox1 nbrRad1 are fed from the neck shapes; f, the lens field, the rim normal and the alpha use the smooth union, clipped to the bounding box of the pair (this removed the outline hump above the higher menu). Screenshot: the menu bottom rim now runs into the fillet as one line.
+- Bridge is painted in paintScreen (paintNecks), after all windows, clipped to the damage region. The first window of a pair captures the true backdrop under the bridge in its glass pass (captureNeckBackdrops: blit of the render target, existing Kawase passes), so the bridge shows real frosted colours; before this the bridge used a clamped edge row and hid content. Screenshot: yellow and green Brave window buttons now show as soft washes under the File menu corner notches.
+- Bridge shader is embedded (s_neckFrag) and hot-reloadable from ~/.config/liquidglass/neck.frag (copy in install/neck.frag): reconfigureEffect liquidglasswash rebuilds it, a compile error disables the bridge until fixed and reloaded. Constants N_FROST N_TINT N_WASH N_DIMK.
+- Window shader constants CORNER_CALM and CORNER_WASH (soft copy dominates near corners, lens and colour split reduced) are live tunable.
+- The global menu Search entry opens an empty 12x12 popup; the droplet engine ran correctly on it (22 frames, 349 ms). The dot seen under Search was the forced glass on that empty popup.
+- Pixel measurement over the vivid wallpaper: window interiors clip to V 1.0 S 1.0, the bridge strip between two menus was V 0.93 (menu dim); N_DIMK 0 was applied live.
+
+### Not verified
+- N_DIMK 0 not yet confirmed by screenshot. The user still finds the bridge area between two menus too bright or unnatural.
+- Idea NOT applied (patch blocks existed only in chat): draw the bridge with the window glass shader itself (uniforms bridgeMode and nbrKind0, one pass per window, dimming blended across the bridge) so the bridge always matches the windows.
+- Window body edges from the Kvantum menu art (faint rounded pillow shapes) stay visible inside merged areas; they come from the theme, not from the glass.
+- Cost of the backdrop capture on the Intel iGPU, behaviour at screen edges, damage-limited repaints.
+- merge log lines are capped at 80 per session. Time ramp (grow and shrink of the bridge) is not built.
+
+### Lessons
+- Zoom and sample pixels before tuning: the real causes were a bridge drawn inside a window pass (skipped when the damage missed that window) and edge-clamped textures.
+- KWin script probe: write a js file, qdbus6 org.kde.KWin /Scripting loadScript FILE NAME, then run on /Scripting/ScriptID, console.warn lines show in the journal.
+- Live reload files (override shader, neck.frag) avoid a relogin; only plugin code needs install plus login.
+- Keep patch blocks under 100 lines and count every anchor exactly once before writing.
+
+### Open items
+1. Glass on wobbly windows (next task). 2. Bridge matching the windows exactly (see not verified). 3. Time ramp. 4. Auto tier by GPU at login. 5. Multi-class colour key. 6. Overview glass (QML FastBlur fork). 7. SDDM theme. 8. Animated context menu follow-ups. 9. Window button idea (radio wave, the user still owes the description).
