@@ -89,7 +89,7 @@ float unionField(vec2 q, float base, float rlMin)
     }
     if (nbrCount > 0.5) {
         float fbb = sdfRoundedBox(q, 0.5 * (lo + hi), 0.5 * (hi - lo), vec4(0.0));
-        u = -smoothMin(-u, -fbb, 6.0);
+        u = -smoothMin(-u, -fbb, 0.5);
     }
     return u;
 }
@@ -119,6 +119,17 @@ void main(void)
     float rl = min(max(r, 0.8 * bandE), min(box.z, box.w));
     float fl = unionField(vertex, sdfRoundedBox(vertex, box.xy, box.zw, vec4(rl)), rl);
     vec2 nl = edgeNormal(p, box.zw, rl);
+    if (nbrCount > 0.5 && abs(fl) < bandE + 2.0) {
+        vec4 rq = vec4(rl);
+        float lxp = unionField(vertex + vec2(1.0, 0.0), sdfRoundedBox(vertex + vec2(1.0, 0.0), box.xy, box.zw, rq), rl);
+        float lxm = unionField(vertex - vec2(1.0, 0.0), sdfRoundedBox(vertex - vec2(1.0, 0.0), box.xy, box.zw, rq), rl);
+        float lyp = unionField(vertex + vec2(0.0, 1.0), sdfRoundedBox(vertex + vec2(0.0, 1.0), box.xy, box.zw, rq), rl);
+        float lym = unionField(vertex - vec2(0.0, 1.0), sdfRoundedBox(vertex - vec2(0.0, 1.0), box.xy, box.zw, rq), rl);
+        vec2 gl2 = vec2(lxp - lxm, lyp - lym);
+        if (dot(gl2, gl2) > 1.0e-6) {
+            nl = normalize(gl2);
+        }
+    }
     float t = clamp(-fl / bandE, 0.0, 1.0);
     float k = pow(1.0 - t, 1.6);
     float dcv = length(box.zw - abs(p));
