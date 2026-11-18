@@ -152,6 +152,10 @@ void main(void)
         float isMenuN = step(0.5, nbrKind0) * (1.0 - step(1.5, nbrKind0));
         isMenu = mix(isMenu, isMenuN, smoothstep(-0.5 * nbrK, 0.5 * nbrK, fOwnB - fN0));
     }
+    if (bridgeMode < 0.5 && nbrCount > 0.5) {
+        float isMenuW = step(0.5, nbrKind0) * (1.0 - step(1.5, nbrKind0));
+        isMenu = mix(isMenu, isMenuW, 0.5 * (1.0 - smoothstep(0.0, 0.5 * nbrK, fN0)));
+    }
     col = mix(col, soft, mix(mix(FROST, MENU_FROST, isMenu), 1.0, washC));
     col *= 1.0 - MENU_DIM * isMenu;
 

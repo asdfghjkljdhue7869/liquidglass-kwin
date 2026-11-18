@@ -578,6 +578,13 @@ bool LiquidGlassEffect::eventFilter(QObject *watched, QEvent *event)
     return false;
 }
 
+static QHash<const EffectWindow *, float> s_effOpacity;
+
+static float effOp(const EffectWindow *w)
+{
+    return s_effOpacity.value(w, float(w->opacity()));
+}
+
 void LiquidGlassEffect::computeNecks()
 {
     m_prevNecks.clear();
@@ -596,7 +603,7 @@ void LiquidGlassEffect::computeNecks()
     std::vector<Cand> cands;
     bool hasTip = false;
     for (EffectWindow *cw : effects->stackingOrder()) {
-        if (!cw || cw->isDeleted() || cw->isHidden() || cw->isMinimized() || !cw->isVisible() || cw->opacity() < 0.2) {
+        if (!cw || cw->isDeleted() || cw->isHidden() || cw->isMinimized() || !cw->isVisible() || effOp(cw) < 0.2) {
             continue;
         }
         if (m_windows.find(cw) == m_windows.end() || cw->hasDecoration() || cw->isDesktop()) {
@@ -1000,7 +1007,7 @@ void LiquidGlassEffect::paintNecks(const RenderTarget &renderTarget, const Rende
             QMatrix4x4 projW = viewport.projectionMatrix();
             projW.translate(float(scaledBg.x()), float(scaledBg.y()));
             const QVector2D hp(0.5f / nb->fbs[1]->colorAttachment()->width(), 0.5f / nb->fbs[1]->colorAttachment()->height());
-            const float opW = float(std::min(n.a->opacity(), n.b->opacity()));
+            const float opW = float(std::min(effOp(n.a), effOp(n.b)));
             ws->setUniform(m_roundedOnscreenPass.mvpMatrixLocation, projW);
             ws->setUniform(m_roundedOnscreenPass.colorMatrixLocation, m_colorMatrix);
             ws->setUniform(m_roundedOnscreenPass.halfpixelLocation, hp);
@@ -1064,7 +1071,7 @@ void LiquidGlassEffect::paintNecks(const RenderTarget &renderTarget, const Rende
         auto radU = [&](const NeckShape &s) {
             return QVector4D(float(s.r[0] * sc), float(s.r[1] * sc), float(s.r[2] * sc), float(s.r[3] * sc));
         };
-        const float op = float(std::min(n.a->opacity(), n.b->opacity()));
+        const float op = float(std::min(effOp(n.a), effOp(n.b)));
         sh->setUniform(sh->uniformLocation("modelViewProjectionMatrix"), proj);
         sh->setUniform(sh->uniformLocation("texUnit"), 0);
         sh->setUniform(sh->uniformLocation("sharpTex"), 1);
@@ -1249,6 +1256,7 @@ bool LiquidGlassEffect::drawWindow(const RenderTarget &renderTarget, const Rende
     blur(renderTarget, viewport, w, mask, deviceRegion, data);
 
     // Draw the window over the blurred area
+    s_effOpacity.insert(w, float(w->opacity() * data.opacity()));
     return effects->drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
 }
 
@@ -1618,6 +1626,7 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
                 int cnt = 0;
                 QVector4D nb[2];
                 QVector4D nr[2];
+                float nbrKindV = 0.0f;
                 if (s_mergeGap > 0.0 && !s_mergeDebug) {
                     for (const Neck &nk : m_necks) {
                         if ((nk.a != w && nk.b != w) || cnt >= 2) {
@@ -1628,6 +1637,9 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
                         const double ly = o.y * scN - scaledBackgroundRect.y();
                         nb[cnt] = QVector4D(float(lx + o.w * scN * 0.5), float(ly + o.h * scN * 0.5), float(o.w * scN * 0.5), float(o.h * scN * 0.5));
                         nr[cnt] = QVector4D(float(o.r[0] * scN), float(o.r[1] * scN), float(o.r[2] * scN), float(o.r[3] * scN));
+                        if (cnt == 0) {
+                            nbrKindV = glassKindOf(nk.a == w ? nk.b : nk.a);
+                        }
                         ++cnt;
                     }
                 }
@@ -1643,6 +1655,10 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
                 const int locR1 = rs->uniformLocation("nbrRad1");
                 if (locK >= 0) {
                     rs->setUniform(locK, float(s_mergeK * scN));
+                }
+                const int locNk = rs->uniformLocation("nbrKind0");
+                if (locNk >= 0) {
+                    rs->setUniform(locNk, nbrKindV);
                 }
                 if (locB0 >= 0 && locR0 >= 0) {
                     rs->setUniform(locB0, nb[0]);
