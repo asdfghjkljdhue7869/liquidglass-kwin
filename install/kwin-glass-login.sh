@@ -22,6 +22,11 @@ if [ -f "$d/round.pending" ]; then
   touch "$d/round.off"
   logger -t liquidglass "login: previous login did not finish cleanly, rounding switched off, delete $d/round.off to re-enable"
 fi
+if [ -f "$d/wobble.pending" ]; then
+  rm -f "$d/wobble.pending"
+  touch "$d/wobble.off"
+  logger -t liquidglass "login: previous login did not finish cleanly, wobble switched off, delete $d/wobble.off to re-enable"
+fi
 if [ -f "$d/glass.off" ]; then
   logger -t liquidglass "login: glass.off exists, staying on stock blur"
   exit 0
@@ -30,6 +35,7 @@ guard=0
 if [ "$mode" != "off" ]; then
   touch "$d/glass.pending"
   if [ ! -f "$d/round.off" ]; then touch "$d/round.pending"; fi
+  if [ ! -f "$d/wobble.off" ]; then touch "$d/wobble.pending"; fi
   guard=1
 fi
 out=$("$d/hooks.d/50-kwin-glass" "$mode" 2>&1)
@@ -37,6 +43,7 @@ logger -t liquidglass "login: mode $mode, hook said: ${out:-ok}"
 case "$out" in
   *"rebuild first"*|*"plugin not installed"*)
     rm -f "$d/glass.pending" "$d/round.pending"
+    rm -f "$d/wobble.pending"
     guard=0
     ;;
 esac
@@ -51,6 +58,10 @@ if [ "$guard" = "1" ]; then
   if [ "$(qdbus6 org.kde.KWin /Effects isEffectLoaded liquidglassround 2>/dev/null)" = "true" ]; then
     rm -f "$d/round.pending"
     logger -t liquidglass "login: round effect still loaded after 8s, stable"
+  fi
+  if [ "$(qdbus6 org.kde.KWin /Effects isEffectLoaded liquidglasswobble 2>/dev/null)" = "true" ]; then
+    rm -f "$d/wobble.pending"
+    logger -t liquidglass "login: wobble effect still loaded after 8s, stable"
   fi
 fi
 exit 0

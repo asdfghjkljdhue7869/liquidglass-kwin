@@ -20,8 +20,13 @@ case "$mode" in
     elif [ ! -f "$cfg/round.off" ]; then
       qdbus6 org.kde.KWin /Effects loadEffect liquidglassround > /dev/null 2>&1
     fi
+    if [ -f /usr/lib/qt6/plugins/kwin/effects/plugins/liquidglasswobble.so ] && [ ! -f "$cfg/wobble.off" ]; then
+      qdbus6 org.kde.KWin /Effects unloadEffect wobblywindows > /dev/null 2>&1
+      qdbus6 org.kde.KWin /Effects loadEffect liquidglasswobble > /dev/null 2>&1
+    fi
     ;;
   off)
+    qdbus6 org.kde.KWin /Effects unloadEffect liquidglasswobble > /dev/null 2>&1
     qdbus6 org.kde.KWin /Effects unloadEffect liquidglassround > /dev/null 2>&1
     qdbus6 org.kde.KWin /Effects unloadEffect liquidglasswash > /dev/null 2>&1
     qdbus6 org.kde.KWin /Effects loadEffect blur > /dev/null 2>&1

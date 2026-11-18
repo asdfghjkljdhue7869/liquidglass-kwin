@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Category": "Appearance",
+        "Description": "Wobbly windows that share their mesh with the glass",
+        "EnabledByDefault": false,
+        "License": "GPL",
+        "Name": "Liquid Glass Wobble"
+    },
+    "org.kde.kwin.effect": {
+        "enabledByDefaultMethod": false
+    }
+}

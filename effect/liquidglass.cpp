@@ -1323,6 +1323,50 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
 
     blurShape.translate(w->pos());
 
+    QList<QPointF> meshGrid;
+    {
+        const QVariantList mg = w->data(5201).toList();
+        if (mg.size() == 16) {
+            for (const QVariant &mvv : mg) {
+                meshGrid.append(mvv.toPointF());
+            }
+        }
+    }
+    const auto meshRest = blurShape.boundingRect();
+    const RectF meshFrame = w->frameGeometry();
+    const bool meshOn = meshGrid.size() == 16 && blurShape.rects().size() > 0 && meshFrame.width() > 1.0 && meshFrame.height() > 1.0;
+    auto meshPt = [&](double rx, double ry) {
+        const double u = (rx - meshFrame.x()) / meshFrame.width();
+        const double v = (ry - meshFrame.y()) / meshFrame.height();
+        const double px[4] = {(1 - u) * (1 - u) * (1 - u), 3 * (1 - u) * (1 - u) * u, 3 * (1 - u) * u * u, u * u * u};
+        const double py[4] = {(1 - v) * (1 - v) * (1 - v), 3 * (1 - v) * (1 - v) * v, 3 * (1 - v) * v * v, v * v * v};
+        double gx = 0.0;
+        double gy = 0.0;
+        for (int j = 0; j < 4; ++j) {
+            for (int i = 0; i < 4; ++i) {
+                gx += px[i] * py[j] * meshGrid[i + j * 4].x();
+                gy += px[i] * py[j] * meshGrid[i + j * 4].y();
+            }
+        }
+        return QPointF(gx, gy);
+    };
+    if (meshOn) {
+        double minX = 1.0e9;
+        double minY = 1.0e9;
+        double maxX = -1.0e9;
+        double maxY = -1.0e9;
+        for (int gj = 0; gj <= 12; ++gj) {
+            for (int gi = 0; gi <= 12; ++gi) {
+                const QPointF pt = meshPt(meshRest.x() + meshRest.width() * gi / 12.0, meshRest.y() + meshRest.height() * gj / 12.0);
+                minX = std::min(minX, pt.x());
+                minY = std::min(minY, pt.y());
+                maxX = std::max(maxX, pt.x());
+                maxY = std::max(maxY, pt.y());
+            }
+        }
+        blurShape = RegionF(RectF(minX - 2.0, minY - 2.0, maxX - minX + 4.0, maxY - minY + 4.0));
+    }
+
     const Rect backgroundRect = blurShape.boundingRect().rounded();
     const Rect scaledBackgroundRect = backgroundRect.scaled(viewport.scale()).rounded();
     const Rect deviceBackgroundRect = viewport.mapToDeviceCoordinates(backgroundRect).rounded();
@@ -1396,7 +1440,8 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
     vbo->reset();
     vbo->setAttribLayout(std::span(GLVertexBuffer::GLVertex2DLayout), sizeof(GLVertex2D));
 
-    const int vertexCount = effectiveShape.size() * 6;
+    const QList<RectF> drawRects = meshOn ? QList<RectF>() : effectiveShape;
+    const int vertexCount = meshOn ? 12 * 12 * 6 : int(drawRects.size()) * 6;
     if (auto result = vbo->map<GLVertex2D>(6 + vertexCount)) {
         auto map = *result;
 
@@ -1446,7 +1491,7 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
         }
 
         // The geometry that will be painted on screen, in device pixels.
-        for (const RectF &rect : effectiveShape) {
+        for (const RectF &rect : drawRects) {
             const float x0 = rect.left();
             const float y0 = rect.top();
             const float x1 = rect.right();
@@ -1486,6 +1531,34 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
             };
         }
 
+        if (meshOn) {
+            const double scM = viewport.scale();
+            auto mv = [&](int gi, int gj) {
+                const double rx = meshRest.x() + meshRest.width() * gi / 12.0;
+                const double ry = meshRest.y() + meshRest.height() * gj / 12.0;
+                const QPointF gp = meshPt(rx, ry);
+                const double dx = (gp.x() - backgroundRect.x()) * scM;
+                const double dy = (gp.y() - backgroundRect.y()) * scM;
+                return GLVertex2D{
+                    .position = QVector2D(float(rx * scM - scaledBackgroundRect.x()), float(ry * scM - scaledBackgroundRect.y())),
+                    .texcoord = QVector2D(float(dx / scaledBackgroundRect.width()), float(1.0 - dy / scaledBackgroundRect.height())),
+                };
+            };
+            for (int gj = 0; gj < 12; ++gj) {
+                for (int gi = 0; gi < 12; ++gi) {
+                    const GLVertex2D va = mv(gi, gj);
+                    const GLVertex2D vb = mv(gi + 1, gj);
+                    const GLVertex2D vc = mv(gi, gj + 1);
+                    const GLVertex2D vd = mv(gi + 1, gj + 1);
+                    map[vboIndex++] = va;
+                    map[vboIndex++] = vd;
+                    map[vboIndex++] = vc;
+                    map[vboIndex++] = va;
+                    map[vboIndex++] = vb;
+                    map[vboIndex++] = vd;
+                }
+            }
+        }
         vbo->unmap();
     } else {
         qCWarning(KWIN_LIQUIDGLASS) << "Failed to map vertex buffer";
@@ -1669,6 +1742,10 @@ void LiquidGlassEffect::blur(const RenderTarget &renderTarget, const RenderViewp
                     rs->setUniform(locR1, nr[1]);
                 }
             }
+        }
+        if (meshOn) {
+            const double scB = viewport.scale();
+            boxUniform = QVector4D(float((meshRest.x() + meshRest.width() * 0.5) * scB - scaledBackgroundRect.x()), float((meshRest.y() + meshRest.height() * 0.5) * scB - scaledBackgroundRect.y()), float(meshRest.width() * scB * 0.5), float(meshRest.height() * scB * 0.5));
         }
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.boxLocation, boxUniform);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.cornerRadiusLocation, radiusUniform);
