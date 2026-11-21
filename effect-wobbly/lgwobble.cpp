@@ -210,7 +210,13 @@ void LiquidGlassWobbleEffect::prePaintWindow(RenderView *view, EffectWindow *w, 
 
     {
         auto gridIt = windows.constFind(w);
-        if ((gridIt == windows.constEnd() || !gridIt->wobblying) && w->data(5201).isValid()) {
+        if (gridIt != windows.constEnd() && gridIt->wobblying && gridIt->position.size() >= 16) {
+            QVariantList gl;
+            for (int gi = 0; gi < 16; ++gi) {
+                gl.append(QPointF(gridIt->position[gi].x, gridIt->position[gi].y));
+            }
+            w->setData(5201, gl);
+        } else if (w->data(5201).isValid()) {
             w->setData(5201, QVariant());
         }
     }
